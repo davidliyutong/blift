@@ -1,3 +1,5 @@
+<img src="web/public/logo.svg" width="64" height="64" alt="blift 标志" />
+
 # blift
 
 [![ci](https://github.com/davidliyutong/blift/actions/workflows/ci.yml/badge.svg)](https://github.com/davidliyutong/blift/actions/workflows/ci.yml)

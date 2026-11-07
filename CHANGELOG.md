@@ -6,6 +6,11 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- New flowing **b** logo with a lifted wing, shared by the web UI, favicon and READMEs.
+  The navigation logo gently lifts on hover or keyboard focus and respects reduced-motion preferences.
+
 ## [0.1.1] - 2026-11-07
 
 ### Added
