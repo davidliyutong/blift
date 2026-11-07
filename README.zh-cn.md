@@ -199,7 +199,7 @@ $ blift share get https://files.example.com/s/83aAZff7bSgz --password launch    
 ```
 
 `blift update` 原地更新到最新版本（与安装脚本一样经服务器中转下载；`--check` 只检查）。Shell 补全覆盖项目、文件名（按前缀向服务器查询）、分享与用户：`blift completion zsh|bash|fish` 输出补全脚本。
-全部命令见 [cli/README.md](cli/README.md)。界面语言跟随 `LANG`，或用 `--lang zh|en` / `BLIFT_LANG`。
+全部命令见 [cli/README.zh-cn.md](cli/README.zh-cn.md)。界面语言跟随 `LANG`，或用 `--lang zh|en` / `BLIFT_LANG`。
 
 ## 设计取舍与 Cloudflare 限制
 
@@ -226,7 +226,8 @@ scripts/  smoke.sh —— 端到端测试（RustFS 容器 + 真实服务端 + CL
 ```
 
 `make help` 列出所有目标：`make test` 类型检查与单元测试，`make smoke` 端到端测试（需要 Docker），
-`make build` 构建全部。修改 API 先改 [docs/API.md](docs/API.md)；[AGENTS.md](AGENTS.md) 描述架构与协作约定；
+`make build` 构建全部。修改 API 先改 [docs/API.md](docs/API.md)；[AGENTS.md](AGENTS.md) 描述架构与协作约定，
+[CONTRIBUTING.md](CONTRIBUTING.md) 说明开发流程以及 commit message、PR、issue 的格式（项目工作语言为英文）；
 发版流程见 [RELEASING.md](RELEASING.md)。
 
 ## 许可
