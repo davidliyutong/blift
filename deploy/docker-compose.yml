@@ -1,0 +1,45 @@
+# docker compose -f deploy/docker-compose.yml up -d
+#
+# On first start the log prints the one-off bootstrap secret (or set BOOTSTRAP_SECRET);
+# open http://<host>:8080/setup, create the admin, then add a storage backend.
+#
+# Optional local object storage: `docker compose -f deploy/docker-compose.yml --profile s3 up -d`.
+# Browsers upload/download directly to S3 with presigned URLs, so the storage endpoint you
+# configure in blift must be reachable under the SAME URL by both the blift container and
+# your users' browsers (e.g. http://<LAN-IP>:9000 or https://s3.example.com) — not
+# "http://rustfs:9000" and not "http://localhost:9000".
+services:
+  blift:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: blift:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Public origin used for share links, the OIDC redirect URI and CLI login links.
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      # One-off secret for creating the first admin. Auto-generated into /data if unset.
+      BOOTSTRAP_SECRET: ${BOOTSTRAP_SECRET:-}
+      # Signs sessions and encrypts stored credentials. Auto-generated into /data if unset;
+      # keep /data backed up — losing it invalidates stored S3/OIDC secrets.
+      APP_SECRET: ${APP_SECRET:-}
+    volumes:
+      - blift-data:/data
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    profiles: ["s3"]
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-blift}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-change-me-please}
+    volumes:
+      - rustfs-data:/data
+
+volumes:
+  blift-data:
+  rustfs-data:

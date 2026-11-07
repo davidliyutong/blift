@@ -1,0 +1,16 @@
+node_modules/
+dist/
+bin/
+.wrangler/
+.dev.vars
+data/
+*.db
+*.db-*
+.DS_Store
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.secrets/
+wrangler.local.toml

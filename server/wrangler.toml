@@ -1,0 +1,43 @@
+# Cloudflare Workers deployment template. See ../README.md ("部署到 Cloudflare Workers").
+#
+# Your own deployment's values (D1 id, custom domain, PUBLIC_URL) belong in a git-ignored copy,
+# server/wrangler.local.toml: `make cf-init` creates it, and the Makefile's wrangler targets use it
+# whenever it exists.
+name = "blift"
+main = "src/worker.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Custom domain (optional). Once routes are listed, wrangler turns the *.workers.dev URL off
+# unless workers_dev is set explicitly.
+# routes = [{ pattern = "files.example.com", custom_domain = true }]
+# workers_dev = true
+
+# The SPA is served by Workers static assets; only /api/* invokes the Worker,
+# so page loads cost no Worker invocations or CPU time.
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "blift"
+database_id = "00000000-0000-0000-0000-000000000000" # `make cf-init` writes the real id into wrangler.local.toml
+
+# Garbage collection: stale uploads, deleted blobs/projects, expired sessions & shares.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[observability]
+enabled = true
+
+# Canonical origin for OIDC redirect_uri, share links and CLI login links (optional: without it
+# the request's own origin is used). Set it when the Worker has more than one hostname.
+# [vars]
+# PUBLIC_URL = "https://files.example.com"
+
+# Secrets (never put them here):
+#   wrangler secret put APP_SECRET        # random 32+ bytes, signs cookies & encrypts credentials
+#   wrangler secret put BOOTSTRAP_SECRET  # one-off secret for creating the first admin

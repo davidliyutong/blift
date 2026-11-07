@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+bin
+data
+cli
+.git
+.wrangler
+**/.wrangler
+**/.dev.vars
+.secrets

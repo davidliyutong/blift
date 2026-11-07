@@ -1,0 +1,28 @@
+{
+  "name": "server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/node.ts",
+    "dev:worker": "wrangler dev",
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "aws4fetch": "^1.0.20",
+    "hono": "^4.13.17",
+    "jose": "^6.2.15"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^2.1.6",
+    "@types/node": "^24",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "vitest": "^5.1.0",
+    "wrangler": "^4.158.0"
+  }
+}

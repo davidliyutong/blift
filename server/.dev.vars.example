@@ -1,0 +1,3 @@
+# Copy to .dev.vars for `make dev-worker` (wrangler dev). Never commit .dev.vars.
+APP_SECRET=dev-app-secret-change-me-0123456789abcdef
+BOOTSTRAP_SECRET=dev-bootstrap
