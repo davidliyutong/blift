@@ -1,42 +1,56 @@
+# Original brief
 
-我需要你开发一套基于对象存储为后端的网盘软件，用于文件共享、传输
-## 业务逻辑
+English | [简体中文](PROMPT.zh-cn.md)
 
-- 轻量，不做树结构，只有project/blob二级目录
-- 支持对公分享，生成分享链接，支持加密分享
-## 技术选型
+The brief blift was built from, translated from the original Chinese. It is kept for reference;
+[README.md](README.md) and [AGENTS.md](AGENTS.md) describe the project as it is now.
 
-- 对接backblaze b2、cloudflare R2、aws S3、rustfs等S3对象存储
-- 支持直接从S3上传下载（通过presigned s3）
-- 原生使用cloudflare workers，可选在docker中运行
-- 支持OIDC登陆，优先适配Authentik
-## 客户端
+---
 
-需要同步开发Web前端和CLI，建议用go开发cli
-- CLI 也能通过 OIDC 浏览器授权登录（类似gh工具那样）
-- CLI能够管理project，上传下载
-- 客户端支持多平台（Linux/Mac，amd64/arm64），最好是单一二进制
-- 支持网页端交互
+Build file-sharing / transfer software backed by object storage.
 
-## 使用体验
+## Business logic
 
-- 管理员部署时，需要提供一个one-off的secret，根据这个secret自助注册
-- 管理员可以配置存储后端，对接OIDC
-- 管理员可以看dashboard得知这个系统的使用情况（用量、请求数、请求的数据量）
-- 管理元可以对用户进行管理，并且进行容量限制的调节
-- OIDC新用户登陆后自动注册，支持HS256/RS256，
-## 参考实现
+- Lightweight: no tree structure, only two levels, project / blob
+- Public sharing: generate share links, with optional password protection
 
-- ZPan https://github.com/saltbo/zpan 参考它的UI库
+## Technology
+
+- Works with S3 object storage such as Backblaze B2, Cloudflare R2, AWS S3 and RustFS
+- Uploads and downloads go directly to S3 (presigned S3 URLs)
+- Runs natively on Cloudflare Workers, optionally in Docker
+- OIDC sign-in, Authentik first
+
+## Clients
+
+Build a web frontend and a CLI together; Go is suggested for the CLI.
+
+- The CLI can also sign in through OIDC in the browser (like the gh tool)
+- The CLI can manage projects, upload and download
+- Clients for several platforms (Linux/Mac, amd64/arm64), ideally a single binary
+- Interaction through the web UI
+
+## User experience
+
+- When deploying, the admin provides a one-off secret and registers themselves with it
+- Admins can configure storage backends and connect OIDC
+- Admins get a dashboard of how the system is used (storage used, request counts, data transferred)
+- Admins can manage users and adjust their storage quotas
+- New OIDC users are registered automatically on first sign-in; HS256 and RS256 are supported
+
+## Reference implementations
+
+- ZPan https://github.com/saltbo/zpan (for its UI library)
 - Safebucket https://github.com/safebucket/safebucket
 - Plik https://github.com/root-gg/plik
-## 其他注意事项
 
-- 基于Makefile管理主要的Target
-- 设计合适的AGENTS.md来辅佐其他Agent工作
-- 注重多语言支持（中/英）
-- 不提倡过度防御编程
-- 考虑到cloudflare的并发限制
-- 管理员需要支持两步验证
-- 内部使用，不需要过度设计（例如计费）
-- 注意垃圾回收，错误处理
+## Other notes
+
+- Main targets managed with a Makefile
+- Design a suitable AGENTS.md to help other agents work on the project
+- Multilingual support (Chinese / English)
+- Do not encourage overly defensive programming
+- Mind Cloudflare's concurrency limits
+- Admins need two-factor authentication
+- For internal use: no over-engineering (e.g. billing)
+- Pay attention to garbage collection and error handling

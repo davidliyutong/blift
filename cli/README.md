@@ -1,19 +1,24 @@
 # blift CLI
 
-blift 的命令行客户端（Go，单一静态二进制，支持 Linux/macOS × amd64/arm64）。
-文件不经过服务器：上传、下载都通过服务器签发的 S3 预签名 URL 直连对象存储。
+English | [简体中文](README.zh-cn.md)
 
-## 安装
+The blift command-line client (Go, a single static binary for Linux/macOS × amd64/arm64).
+Files never pass through the server: uploads and downloads go straight to the object storage
+through S3 presigned URLs issued by the server.
+
+## Install
 
 ```sh
-curl -fsSL https://<你的 blift 服务器>/install.sh | sh
+curl -fsSL https://<your blift server>/install.sh | sh
 ```
 
-安装与该服务器版本一致的 CLI：经服务器中转 GitHub Release 下载（失败时直连 GitHub），校验 SHA-256。可选环境变量：
-`BLIFT_INSTALL_DIR`（安装目录，默认 `~/.local/bin`）、`BLIFT_VERSION`（指定版本）、`BLIFT_DOWNLOAD_URL`（只从该镜像下载）、
-`BLIFT_API_KEY`（装完后用这个 API key 登录，适合无人值守部署：`curl -fsSL https://<服务器>/install.sh | BLIFT_API_KEY=bliftk_… sh`）。
+This installs the CLI version that matches the server: downloaded from the GitHub release through
+the server (directly from GitHub if that fails) and SHA-256 verified. Optional environment variables:
+`BLIFT_INSTALL_DIR` (install directory, default `~/.local/bin`), `BLIFT_VERSION` (a specific version),
+`BLIFT_DOWNLOAD_URL` (download only from this mirror) and `BLIFT_API_KEY` (sign in with this API key
+after installing, for unattended setup: `curl -fsSL https://<server>/install.sh | BLIFT_API_KEY=bliftk_… sh`).
 
-## 构建与测试
+## Build and test
 
 ```sh
 cd cli
@@ -21,74 +26,87 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=v0.1.0" -o ../b
 go test ./... && go vet ./...
 ```
 
-## 配置
+## Configuration
 
-- 配置文件：`$XDG_CONFIG_HOME/blift/config.json`（默认 `~/.config/blift/config.json`，权限 0600），保存 `server`、`token`、`user`。
-- 环境变量：`BLIFT_SERVER`、`BLIFT_TOKEN`、`BLIFT_LANG`（`zh` / `en`）；`BLIFT_API_KEY` 只用于 `blift login`。
-- 全局参数：`--server URL`、`--lang zh|en`、`--json`（输出原始 JSON）、`-q/--quiet`。
-- 语言优先级：`--lang` > `BLIFT_LANG` > `LC_ALL` / `LC_MESSAGES` / `LANG`（以 `zh` 开头即中文）> 英文。
-- 保存的令牌只会发给签发它的服务器；`BLIFT_TOKEN` 总是优先。
+- Config file: `$XDG_CONFIG_HOME/blift/config.json` (default `~/.config/blift/config.json`, mode 0600),
+  holding `server`, `token` and `user`.
+- Environment: `BLIFT_SERVER`, `BLIFT_TOKEN`, `BLIFT_LANG` (`zh` / `en`); `BLIFT_API_KEY` is only read
+  by `blift login`.
+- Global flags: `--server URL`, `--lang zh|en`, `--json` (raw JSON output), `-q/--quiet`.
+- Language: `--lang` > `BLIFT_LANG` > `LC_ALL` / `LC_MESSAGES` / `LANG` (Chinese if it starts with
+  `zh`) > English.
+- A saved token is only ever sent to the server that issued it; `BLIFT_TOKEN` always wins.
 
-## 命令
+## Commands
 
-| 命令 | 说明 |
+| Command | Description |
 | --- | --- |
-| `blift login [--server URL] [--no-browser] [--token T \| --api-key K]` | 浏览器设备码授权登录；或用 API key（网页「账户设置 → API keys」创建，默认读 `BLIFT_API_KEY`）换取会话；或直接使用令牌 |
-| `blift logout` / `whoami` / `version` | 退出、查看当前用户、版本 |
-| `blift project ls\|create\|info\|rm\|rename\|members\|add-member\|rm-member` | 项目管理（别名 `projects`、`p`） |
-| `blift ls <项目> [--sort name\|size\|time] [--query 文本] [-n 100] [-a]` | 列出文件（默认最多 100 个，`-n/--limit` 调整，`-a/--all` 全部） |
-| `blift upload <项目> <文件>... [--name N] [--overwrite] [-j 4]` | 上传（别名 `up`、`push`） |
-| `blift download <项目> [文件...] [--all] [-o 目录或文件] [-j 4]` | 下载（别名 `dl`、`pull`） |
-| `blift rm <项目> <文件>... [-y]` | 删除文件 |
-| `blift mv <项目> <文件> <新名称>` | 重命名文件 |
-| `blift url <项目> <文件>` | 输出预签名下载链接（1 小时有效） |
-| `blift share create <项目> [文件] [--password P] [--expires 7d] [--max-downloads N]` | 创建分享（不指定文件即分享整个项目） |
-| `blift share ls [项目]` / `share rm <分享ID>` | 列出 / 删除分享 |
-| `blift share get <分享链接或token> [文件...] [--password P] [-o 目录]` | 免登录从分享链接下载 |
-| `blift update [--check] [--version X.Y.Z] [--force]` | 原地更新到最新版本（别名 `upgrade`） |
+| `blift login [--server URL] [--no-browser] [--token T \| --api-key K]` | Sign in by approving a device code in the browser; or exchange an API key (created in the web UI under Account → API keys, `BLIFT_API_KEY` by default) for a session; or use a token directly |
+| `blift logout` / `whoami` / `version` | Sign out, show the current user, show the version |
+| `blift project ls\|create\|info\|rm\|rename\|members\|add-member\|rm-member` | Manage projects (aliases `projects`, `p`) |
+| `blift ls <project> [--sort name\|size\|time] [--query text] [-n 100] [-a]` | List files (at most 100 by default; `-n/--limit` changes that, `-a/--all` lists all) |
+| `blift upload <project> <file>... [--name N] [--overwrite] [-j 4]` | Upload (aliases `up`, `push`) |
+| `blift download <project> [file...] [--all] [-o dir-or-file] [-j 4]` | Download (aliases `dl`, `pull`) |
+| `blift rm <project> <file>... [-y]` | Delete files |
+| `blift mv <project> <file> <new-name>` | Rename a file |
+| `blift url <project> <file>` | Print a presigned download URL (valid for 1 hour) |
+| `blift share create <project> [file] [--password P] [--expires 7d] [--max-downloads N]` | Create a share (the whole project when no file is given) |
+| `blift share ls [project]` / `share rm <share-id>` | List / delete shares |
+| `blift share get <share-url-or-token> [file...] [--password P] [-o dir]` | Download from a share link without signing in |
+| `blift update [--check] [--version X.Y.Z] [--force]` | Update in place to the latest release (alias `upgrade`) |
 
-项目参数可以是 ID、名称或 `所有者/名称`：ID 精确匹配优先；同名时优先自己拥有的项目，仍有歧义则报错并列出候选。
-文件参数可以是文件名或 ID（按名称精确查找，项目再大也只需一次请求）。
+A project argument can be an ID, a name or `owner/name`: an exact ID match wins; among projects
+with the same name your own comes first, and if it is still ambiguous the command fails and lists
+the candidates. A file argument can be a file name or an ID (looked up by exact name: one request,
+however large the project).
 
-## 更新
+## Updating
 
-`blift update` 把当前二进制原地替换为最新版本：先向已配置的 blift 服务器查询最新版本、经它中转下载，
-失败时直连 GitHub（与 install.sh 相同，`BLIFT_DOWNLOAD_URL` 可指定镜像）；按 `SHA256SUMS` 校验通过后
-才替换。`--check` 只检查，`--version` 安装指定版本（可降级），装在需要 root 的目录时用 `sudo blift update`。
+`blift update` replaces the running binary with the latest release: it asks the configured blift
+server for the latest version and downloads through it, falling back to GitHub (like install.sh;
+`BLIFT_DOWNLOAD_URL` sets a mirror). The binary is only replaced after it matches `SHA256SUMS`.
+`--check` only checks, `--version` installs a specific version (downgrades too); use
+`sudo blift update` when it is installed in a directory that needs root.
 
-## Shell 补全
+## Shell completion
 
-补全项目名、文件名（按已输入的前缀向服务器查询）、分享 ID、成员与用户，以及 `--sort`、`--role`、
-`--storage`、`--expires`、`--lang` 等参数值：
+Completes project names, file names (looked up on the server by the prefix typed so far), share
+IDs, members and users, and the values of flags such as `--sort`, `--role`, `--storage`,
+`--expires` and `--lang`:
 
 ```sh
-# zsh（确保 fpath 中的目录在 compinit 之前）
+# zsh (make sure that directory in fpath comes before compinit)
 blift completion zsh > "${fpath[1]}/_blift"
-# bash（需要 bash-completion）
+# bash (needs bash-completion)
 blift completion bash > ~/.local/share/bash-completion/completions/blift
 # fish
 blift completion fish > ~/.config/fish/completions/blift.fish
 ```
 
-## 示例
+## Examples
 
 ```sh
-blift login --server https://files.example.com     # 打开浏览器确认授权
-blift p create datasets -d "训练数据"
-blift up datasets ./model.ckpt ./notes.md -j 8      # >64 MiB 自动分片并行上传
-blift up datasets ./dist                            # 目录：只上传其中的普通文件（不递归）
-blift ls datasets --sort size -n 20                 # 最大的 20 个文件
-blift ls datasets --query ckpt --all                # 名称包含 ckpt 的全部文件
-blift dl datasets model.ckpt -o ~/Downloads/        # >64 MiB 使用并行 Range 下载
+blift login --server https://files.example.com     # approve in the browser
+blift p create datasets -d "training data"
+blift up datasets ./model.ckpt ./notes.md -j 8      # > 64 MiB: multipart, parts in parallel
+blift up datasets ./dist                            # a directory: its regular files only (not recursive)
+blift ls datasets --sort size -n 20                 # the 20 largest files
+blift ls datasets --query ckpt --all                # every file whose name contains "ckpt"
+blift dl datasets model.ckpt -o ~/Downloads/        # > 64 MiB: parallel range requests
 blift dl datasets --all -o ./backup
 blift share create datasets model.ckpt --password 1234 --expires 7d
 blift share get https://files.example.com/s/AbCd123 --password 1234 -o .
 blift --json ls datasets | jq '.[].name'
 ```
 
-## 行为说明
+## Behaviour
 
-- 上传：先 `init`，服务器决定单次 PUT（≤ 64 MiB）或分片；分片 URL 每批最多 100 个，按 `-j` 并发上传，每片失败重试 3 次（指数退避），最后带 ETag 列表 `complete`。失败或 Ctrl-C 时调用 `DELETE /api/uploads/:id` 取消。
-- 下载：先写入 `<目标>.part`，成功后改名；失败时删除临时文件。
-- 多个文件中个别失败时会继续处理其余文件，最后以非零状态退出。
-- 进度条仅在 stderr 为终端且未使用 `-q` 时显示；状态信息写 stderr，表格 / JSON 写 stdout。
+- Upload: `init` first; the server picks a single PUT (≤ 64 MiB) or multipart. Part URLs come in
+  batches of at most 100 and are uploaded `-j` at a time, each part retried 3 times (exponential
+  backoff), then `complete` with the list of ETags. On failure or Ctrl-C the upload is cancelled
+  with `DELETE /api/uploads/:id`.
+- Download: written to `<target>.part` first and renamed when complete; the temporary file is
+  removed on failure.
+- When some of several files fail, the rest are still processed and the command exits non-zero.
+- Progress bars only appear when stderr is a terminal and `-q` is not set; status messages go to
+  stderr, tables / JSON to stdout.

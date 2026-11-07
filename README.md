@@ -6,7 +6,7 @@
 [![release](https://img.shields.io/github/v/release/davidliyutong/blift)](https://github.com/davidliyutong/blift/releases)
 [![license](https://img.shields.io/github/license/davidliyutong/blift)](LICENSE)
 
-English | [简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-cn.md)
 
 **blift** is a lightweight file-sharing and transfer service for teams, built on any
 S3-compatible object storage (Cloudflare R2, Backblaze B2, AWS S3, RustFS, MinIO…). It runs

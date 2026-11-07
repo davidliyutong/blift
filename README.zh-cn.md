@@ -199,7 +199,7 @@ $ blift share get https://files.example.com/s/83aAZff7bSgz --password launch    
 ```
 
 `blift update` 原地更新到最新版本（与安装脚本一样经服务器中转下载；`--check` 只检查）。Shell 补全覆盖项目、文件名（按前缀向服务器查询）、分享与用户：`blift completion zsh|bash|fish` 输出补全脚本。
-全部命令见 [cli/README.md](cli/README.md)。界面语言跟随 `LANG`，或用 `--lang zh|en` / `BLIFT_LANG`。
+全部命令见 [cli/README.zh-cn.md](cli/README.zh-cn.md)。界面语言跟随 `LANG`，或用 `--lang zh|en` / `BLIFT_LANG`。
 
 ## 设计取舍与 Cloudflare 限制
 
