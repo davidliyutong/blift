@@ -161,6 +161,34 @@ CREATE INDEX shares_expires ON shares(expires_at) WHERE expires_at IS NOT NULL;
 CREATE INDEX blobs_gc ON blobs(storage_id, updated_at) WHERE status = 'deleted';
 `,
   },
+  {
+    // API keys: credentials that `blift login --api-key` exchanges for a CLI session (unattended
+    // installs). Only the key's SHA-256 is stored; sessions remember the key they came from so
+    // revoking a key can sign them out too.
+    // Inboxes: a project with an inbox_token accepts anonymous uploads at /i/<token>.
+    name: "0003_api_keys_inbox",
+    sql: `
+CREATE TABLE api_keys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  prefix TEXT NOT NULL,
+  max_uses INTEGER,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER,
+  last_used_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX api_keys_user ON api_keys(user_id);
+CREATE INDEX api_keys_expires ON api_keys(expires_at) WHERE expires_at IS NOT NULL;
+ALTER TABLE sessions ADD COLUMN api_key_id TEXT;
+CREATE INDEX sessions_api_key ON sessions(api_key_id) WHERE api_key_id IS NOT NULL;
+ALTER TABLE projects ADD COLUMN inbox_token TEXT;
+CREATE UNIQUE INDEX projects_inbox ON projects(inbox_token) WHERE inbox_token IS NOT NULL;
+ALTER TABLE blobs ADD COLUMN via_inbox INTEGER NOT NULL DEFAULT 0;
+`,
+  },
 ];
 
 const split = (sql: string) =>

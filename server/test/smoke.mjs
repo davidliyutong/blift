@@ -65,6 +65,26 @@ async function upload(projectId, name, data, extra = {}) {
   return api("POST", `/api/uploads/${init.blob_id}/complete`, {}); // server lists the parts itself
 }
 
+/** Anonymous upload through a project inbox (single or multipart); returns {name, size}. */
+async function inboxUpload(token, name, data) {
+  const init = await api("POST", `/api/public/inbox/${token}/uploads`, { name, size: data.length }, { auth: null, expect: 201 });
+  const headers = { "x-upload-token": init.upload_token };
+  if (init.mode === "single") {
+    const r = await fetch(init.url, { method: "PUT", body: data });
+    assert.equal(r.status, 200, `PUT single → ${r.status} ${await r.text()}`);
+  } else {
+    const nums = Array.from({ length: init.part_count }, (_, i) => i + 1);
+    const { urls } = await api("POST", `/api/public/inbox/${token}/uploads/${init.blob_id}/parts`, { part_numbers: nums }, { auth: null, headers });
+    await Promise.all(
+      nums.map(async (n) => {
+        const r = await fetch(urls[n], { method: "PUT", body: data.subarray((n - 1) * init.part_size, n * init.part_size) });
+        assert.equal(r.status, 200, `PUT part ${n} → ${r.status}`);
+      }),
+    );
+  }
+  return api("POST", `/api/public/inbox/${token}/uploads/${init.blob_id}/complete`, {}, { auth: null, headers });
+}
+
 // Minimal OIDC provider imitating Authentik (issuer ends with "/application/o/<slug>/").
 async function startIdp() {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
@@ -332,6 +352,73 @@ const viaToken = await api("GET", "/api/projects", undefined, { auth: tok.token 
 assert.deepEqual(viaToken.projects.map((p) => p.name).sort(), ["demo", "listing"]);
 step("CLI device login (pending → approved → token, single use)");
 
+// API keys: unattended CLI logins. Single use, unlimited, linked sessions, revocation.
+const k1 = await api("POST", "/api/auth/api-keys", { name: "deploy", max_uses: 1, expires_in: 3600 }, { expect: 201 });
+assert.match(k1.key, /^bliftk_[0-9A-Za-z]{32}$/);
+assert.equal(k1.prefix, k1.key.slice(0, 11));
+const viaKey = await api("POST", "/api/cli/login/api-key", { api_key: k1.key, client_name: "smoke key" }, { auth: null });
+assert.match(viaKey.token, /^blift_/);
+assert.equal(viaKey.user.username, "admin");
+await api("GET", "/api/projects", undefined, { auth: viaKey.token });
+assert.equal(await errCode(api("POST", "/api/cli/login/api-key", { api_key: k1.key }, { auth: null, expect: 401 })), "invalid_api_key");
+assert.equal(await errCode(api("POST", "/api/cli/login/api-key", { api_key: "bliftk_nope" }, { auth: null, expect: 401 })), "invalid_api_key");
+assert.equal(await errCode(api("POST", "/api/auth/api-keys", { name: "x", max_uses: 0 }, { expect: 400 })), "bad_request");
+const k2 = await api("POST", "/api/auth/api-keys", { name: "fleet" }, { expect: 201 });
+assert.deepEqual([k2.max_uses, k2.expires_at], [null, null]);
+const fleetTokens = [];
+for (const host of ["build-1", "build-2"])
+  fleetTokens.push((await api("POST", "/api/cli/login/api-key", { api_key: k2.key, client_name: host }, { auth: null })).token);
+const fleet = (await api("GET", "/api/auth/api-keys")).api_keys.find((k) => k.id === k2.id);
+assert.deepEqual([fleet.use_count, fleet.session_count, fleet.key], [2, 2, undefined]);
+const keySessions = (await api("GET", "/api/auth/sessions")).sessions.filter((x) => x.api_key_name === "fleet");
+assert.deepEqual(keySessions.map((x) => x.name).sort(), ["build-1", "build-2"]);
+await api("DELETE", `/api/auth/api-keys/${k1.id}`, undefined, { expect: 204 }); // its session stays
+await api("GET", "/api/auth/me", undefined, { auth: viaKey.token });
+await api("DELETE", `/api/auth/api-keys/${k2.id}?revoke_sessions=1`, undefined, { expect: 204 });
+for (const t of fleetTokens) assert.equal(await errCode(api("GET", "/api/auth/me", undefined, { auth: t, expect: 401 })), "unauthorized");
+assert.equal(await errCode(api("POST", "/api/cli/login/api-key", { api_key: k2.key }, { auth: null, expect: 401 })), "invalid_api_key");
+assert.equal(await errCode(api("DELETE", `/api/auth/api-keys/${k2.id}`, undefined, { expect: 404 })), "not_found");
+step("API keys: single use, unlimited, sessions linked to the key, delete signs them out");
+
+// Inbox: anonymous uploads into a project (off by default, link visible to editors and owners).
+const ib = await api("POST", "/api/projects", { name: "inbox", description: "drop files here" }, { expect: 201 });
+assert.deepEqual([ib.inbox_enabled, ib.inbox_url], [false, null]);
+const ibOn = await api("PATCH", `/api/projects/${ib.id}`, { inbox_enabled: true });
+assert.match(ibOn.inbox_url, /\/i\/[0-9A-Za-z]{12}$/);
+let ibToken = ibOn.inbox_url.split("/i/")[1];
+const ibInfo = await api("GET", `/api/public/inbox/${ibToken}`, undefined, { auth: null });
+assert.deepEqual(ibInfo.inbox, { name: "inbox", description: "drop files here", owner: "admin" });
+const report = Buffer.from("quarterly numbers");
+assert.deepEqual(await inboxUpload(ibToken, "report.pdf", report), { name: "report.pdf", size: report.length });
+assert.equal((await inboxUpload(ibToken, "report.pdf", report)).name, "report (1).pdf"); // never replaces
+assert.equal((await inboxUpload(ibToken, "big.bin", big)).size, big.length); // multipart
+const ibFiles = (await api("GET", `/api/projects/${ib.id}/blobs?sort=name&order=asc`)).blobs;
+assert.deepEqual(ibFiles.map((b) => [b.name, b.via_inbox, b.uploader]), [["big.bin", true, null], ["report (1).pdf", true, null], ["report.pdf", true, null]]);
+assert.equal((await api("GET", `/api/projects/${ib.id}`)).used_bytes, 2 * report.length + big.length);
+// An upload token only works for its own upload.
+const ia = await api("POST", `/api/public/inbox/${ibToken}/uploads`, { name: "a.txt", size: 1 }, { auth: null, expect: 201 });
+const ibb = await api("POST", `/api/public/inbox/${ibToken}/uploads`, { name: "b.txt", size: 1 }, { auth: null, expect: 201 });
+const wrongTok = { "x-upload-token": ibb.upload_token };
+assert.equal(await errCode(api("POST", `/api/public/inbox/${ibToken}/uploads/${ia.blob_id}/complete`, {}, { auth: null, headers: wrongTok, expect: 404 })), "not_found");
+await api("DELETE", `/api/public/inbox/${ibToken}/uploads/${ia.blob_id}`, undefined, { auth: null, headers: { "x-upload-token": ia.upload_token }, expect: 204 });
+// Viewers know the inbox is on but do not get its link, and cannot change it.
+await api("POST", `/api/projects/${ib.id}/members`, { user: "alice-2", role: "viewer" }, { expect: 201 });
+const asBob = (method, path, body, expect) => api(method, path, body, { auth: null, headers: { cookie: l2.session }, expect });
+const ibViewer = await asBob("GET", `/api/projects/${ib.id}`);
+assert.deepEqual([ibViewer.inbox_enabled, ibViewer.inbox_url], [true, null]);
+assert.equal(await errCode(asBob("PATCH", `/api/projects/${ib.id}`, { inbox_enabled: false }, 403)), "forbidden");
+// Reset and disable: the old link stops working at once, pending uploads too.
+const reset = await api("POST", `/api/projects/${ib.id}/inbox/reset`);
+assert.notEqual(reset.inbox_url, ibOn.inbox_url);
+assert.equal(await errCode(api("GET", `/api/public/inbox/${ibToken}`, undefined, { auth: null, expect: 404 })), "not_found");
+// b.txt was started through the old link with its own (valid) upload token.
+assert.equal(await errCode(api("POST", `/api/public/inbox/${ibToken}/uploads/${ibb.blob_id}/complete`, {}, { auth: null, headers: wrongTok, expect: 404 })), "not_found");
+ibToken = reset.inbox_url.split("/i/")[1];
+await api("PATCH", `/api/projects/${ib.id}`, { inbox_enabled: false });
+assert.equal(await errCode(api("GET", `/api/public/inbox/${ibToken}`, undefined, { auth: null, expect: 404 })), "not_found");
+assert.equal(await errCode(api("POST", `/api/projects/${ib.id}/inbox/reset`, undefined, { expect: 409 })), "conflict");
+step("inbox: anonymous single + multipart uploads, auto-rename, upload tokens, viewer view, reset + disable");
+
 // Members
 const second = await api("POST", "/api/projects", { name: "demo2" }, { auth: tok.token, expect: 201 });
 await api("DELETE", `/api/projects/${second.id}`, undefined, { auth: tok.token, expect: 204 });
@@ -361,12 +448,16 @@ assert.equal(gc2.result.projects_purged, 1);
 step(`GC removes objects (${gc1.result.objects_deleted}) and purges deleted projects`);
 
 await api("DELETE", `/api/projects/${lp.id}`, undefined, { expect: 204 }); // releases its usage at once
+await api("DELETE", `/api/projects/${ib.id}`, undefined, { expect: 204 });
+const inboxBytes = 2 * report.length + big.length;
 const stats = await api("GET", "/api/admin/stats?days=7");
 assert.equal(stats.series.length, 7);
 const today = stats.series.at(-1);
 const listingBytes = names.reduce((n, x) => n + Buffer.byteLength(x), 0);
 assert.ok(
-  today.requests > 20 && today.uploads === 3 + names.length && today.upload_bytes === small.length + big.length + small2.length + listingBytes,
+  today.requests > 20 &&
+    today.uploads === 3 + names.length + 3 &&
+    today.upload_bytes === small.length + big.length + small2.length + listingBytes + inboxBytes,
   JSON.stringify(today),
 );
 const users = await api("GET", "/api/admin/users");

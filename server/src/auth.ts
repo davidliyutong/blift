@@ -21,12 +21,13 @@ export async function createSession(
   kind: "web" | "cli",
   name: string | null,
   mfaPending: boolean,
+  apiKeyId: string | null = null,
 ): Promise<string> {
   const token = newToken();
   const t = now();
   await run(
     c.env.DB,
-    "INSERT INTO sessions (id, user_id, kind, name, mfa_pending, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO sessions (id, user_id, kind, name, mfa_pending, created_at, expires_at, last_used_at, api_key_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     await sha256Hex(token),
     userId,
     kind,
@@ -35,6 +36,7 @@ export async function createSession(
     t,
     t + TTL[kind],
     t,
+    apiKeyId,
   );
   return token;
 }

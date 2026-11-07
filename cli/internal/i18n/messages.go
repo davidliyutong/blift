@@ -3,7 +3,7 @@ package i18n
 var en = map[string]string{
 	// commands
 	"cmd.root":               "blift: share files through S3-compatible object storage",
-	"cmd.login":              "Log in via the browser (device flow) or with --token",
+	"cmd.login":              "Log in via the browser (device flow), with --api-key or with --token",
 	"cmd.logout":             "Log out and forget the saved token",
 	"cmd.whoami":             "Show the current user",
 	"cmd.version":            "Print the client version",
@@ -38,6 +38,7 @@ var en = map[string]string{
 	"flag.quiet":          "suppress status messages and progress bars",
 	"flag.no_browser":     "do not open a browser",
 	"flag.token":          "log in with an existing API token instead of the browser",
+	"flag.api_key":        "log in with an API key from Account → API keys (default: $BLIFT_API_KEY)",
 	"flag.description":    "project description",
 	"flag.storage":        "storage backend id or name (default: the server default)",
 	"flag.yes":            "do not ask for confirmation",
@@ -82,6 +83,7 @@ var en = map[string]string{
 	"col.expires":      "Expires",
 	"col.downloads":    "Downloads",
 	"col.url":          "URL",
+	"col.inbox":        "Inbox",
 
 	// messages
 	"error":                 "error: ",
@@ -98,6 +100,8 @@ var en = map[string]string{
 	"login.url":             "  Open this URL in your browser to approve: %s",
 	"login.waiting":         "Waiting for approval...",
 	"login.ok":              "✓ Logged in as %s (%s)",
+	"inbox.off":             "off",
+	"inbox.uploader":        "(inbox)",
 	"logout.none":           "Not logged in.",
 	"logout.ok":             "✓ Logged out of %s",
 	"project.not_found":     "project not found: %s",
@@ -156,6 +160,7 @@ var en = map[string]string{
 	"api.account_disabled":      "account disabled by an administrator",
 	"api.quota_exceeded":        "storage quota exceeded",
 	"api.invalid_secret":        "wrong bootstrap secret",
+	"api.invalid_api_key":       "API key is invalid, expired or used up",
 	"api.invalid_password":      "wrong share password",
 	"api.not_found":             "not found",
 	"api.conflict":              "conflict",
@@ -175,7 +180,7 @@ var en = map[string]string{
 
 var zh = map[string]string{
 	"cmd.root":               "blift：基于 S3 兼容对象存储的文件分享与传输",
-	"cmd.login":              "通过浏览器授权（设备码）或 --token 登录",
+	"cmd.login":              "通过浏览器授权（设备码）、--api-key 或 --token 登录",
 	"cmd.logout":             "退出登录并删除本地令牌",
 	"cmd.whoami":             "显示当前用户",
 	"cmd.version":            "显示客户端版本",
@@ -209,6 +214,7 @@ var zh = map[string]string{
 	"flag.quiet":          "不显示状态信息和进度条",
 	"flag.no_browser":     "不自动打开浏览器",
 	"flag.token":          "使用已有 API 令牌登录，不走浏览器授权",
+	"flag.api_key":        "使用 API key（账户设置 → API keys）登录（默认读取 $BLIFT_API_KEY）",
 	"flag.description":    "项目描述",
 	"flag.storage":        "存储后端 ID 或名称（默认：服务器默认存储）",
 	"flag.yes":            "不再确认",
@@ -252,6 +258,7 @@ var zh = map[string]string{
 	"col.expires":      "过期时间",
 	"col.downloads":    "下载次数",
 	"col.url":          "链接",
+	"col.inbox":        "收件箱",
 
 	"error":                 "错误：",
 	"warning":               "警告：",
@@ -267,6 +274,8 @@ var zh = map[string]string{
 	"login.url":             "  请在浏览器中打开以下链接并确认授权：%s",
 	"login.waiting":         "等待授权中……",
 	"login.ok":              "✓ 已登录为 %s（%s）",
+	"inbox.off":             "未开启",
+	"inbox.uploader":        "（收件箱）",
 	"logout.none":           "当前未登录。",
 	"logout.ok":             "✓ 已退出 %s",
 	"project.not_found":     "项目不存在：%s",
@@ -324,6 +333,7 @@ var zh = map[string]string{
 	"api.account_disabled":      "账号已被管理员停用",
 	"api.quota_exceeded":        "超出存储配额",
 	"api.invalid_secret":        "初始化密钥错误",
+	"api.invalid_api_key":       "API key 无效、已过期或已用完",
 	"api.invalid_password":      "分享密码错误",
 	"api.not_found":             "资源不存在",
 	"api.conflict":              "操作冲突",

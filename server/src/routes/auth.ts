@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 import { clearSessionCookie, clientName, createSession, requireUser, setSessionCookie } from "../auth";
-import { all, now, one, run } from "../db";
+import { all, now, one, run, stmt } from "../db";
 import type { AppEnv, UserRow } from "../env";
-import { decrypt, encrypt, hashPassword, verifyPassword } from "../lib/crypto";
+import { decrypt, encrypt, hashPassword, sha256Hex, verifyPassword } from "../lib/crypto";
 import { ApiError, conflict, forbidden, notFound, unauthorized } from "../lib/errors";
-import { body, password, str } from "../lib/http";
+import { body, int, password, str } from "../lib/http";
+import { newApiKey, newId } from "../lib/ids";
 import { newTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { getSettings } from "../services/settings";
 import { toUser } from "../services/users";
@@ -132,9 +133,19 @@ r.post("/password", async (c) => {
 r.get("/sessions", async (c) => {
   const u = requireUser(c);
   const current = c.get("session")!.id;
-  const rows = await all<{ id: string; kind: string; name: string | null; created_at: number; last_used_at: number; expires_at: number }>(
+  const rows = await all<{
+    id: string;
+    kind: string;
+    name: string | null;
+    created_at: number;
+    last_used_at: number;
+    expires_at: number;
+    api_key_name: string | null;
+  }>(
     c.env.DB,
-    "SELECT id, kind, name, created_at, last_used_at, expires_at FROM sessions WHERE user_id = ? AND expires_at > ? AND mfa_pending = 0 ORDER BY last_used_at DESC",
+    `SELECT s.id, s.kind, s.name, s.created_at, s.last_used_at, s.expires_at, k.name AS api_key_name
+     FROM sessions s LEFT JOIN api_keys k ON k.id = s.api_key_id
+     WHERE s.user_id = ? AND s.expires_at > ? AND s.mfa_pending = 0 ORDER BY s.last_used_at DESC`,
     u.id,
     now(),
   );
@@ -146,6 +157,92 @@ r.delete("/sessions/:id", async (c) => {
   const n = await run(c.env.DB, "DELETE FROM sessions WHERE id = ? AND user_id = ?", c.req.param("id"), u.id);
   if (!n) throw notFound("session");
   if (c.req.param("id") === c.get("session")!.id) clearSessionCookie(c);
+  return c.body(null, 204);
+});
+
+// ---- API keys: credentials for unattended CLI logins (`blift login --api-key`, install.sh with
+// BLIFT_API_KEY). Every use creates a CLI session; only the key's SHA-256 is stored and the key
+// itself is shown once, when it is created.
+
+type ApiKeyRow = {
+  id: string;
+  name: string;
+  prefix: string;
+  max_uses: number | null;
+  use_count: number;
+  expires_at: number | null;
+  last_used_at: number | null;
+  created_at: number;
+  session_count: number;
+};
+
+const toApiKey = (k: ApiKeyRow) => ({
+  id: k.id,
+  name: k.name,
+  prefix: k.prefix,
+  max_uses: k.max_uses,
+  use_count: k.use_count,
+  expires_at: k.expires_at,
+  last_used_at: k.last_used_at,
+  created_at: k.created_at,
+  session_count: k.session_count,
+});
+
+r.get("/api-keys", async (c) => {
+  const u = requireUser(c);
+  const rows = await all<ApiKeyRow>(
+    c.env.DB,
+    `SELECT k.*, (SELECT COUNT(*) FROM sessions s WHERE s.api_key_id = k.id AND s.expires_at > ?) AS session_count
+     FROM api_keys k WHERE k.user_id = ? ORDER BY k.created_at DESC`,
+    now(),
+    u.id,
+  );
+  return c.json({ api_keys: rows.map(toApiKey) });
+});
+
+r.post("/api-keys", async (c) => {
+  const u = requireUser(c);
+  const b = await body(c);
+  const name = str(b.name, "name", 100);
+  const maxUses = b.max_uses == null ? null : int(b.max_uses, "max_uses", 1, 1_000_000);
+  const expiresIn = b.expires_in == null ? null : int(b.expires_in, "expires_in", 60, 3650 * 86400);
+  const key = newApiKey();
+  const row: ApiKeyRow = {
+    id: newId(),
+    name,
+    prefix: key.slice(0, 11),
+    max_uses: maxUses,
+    use_count: 0,
+    expires_at: expiresIn ? now() + expiresIn * 1000 : null,
+    last_used_at: null,
+    created_at: now(),
+    session_count: 0,
+  };
+  await run(
+    c.env.DB,
+    "INSERT INTO api_keys (id, user_id, name, key_hash, prefix, max_uses, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    row.id,
+    u.id,
+    row.name,
+    await sha256Hex(key),
+    row.prefix,
+    row.max_uses,
+    row.expires_at,
+    row.created_at,
+  );
+  return c.json({ ...toApiKey(row), key }, 201);
+});
+
+// ?revoke_sessions=1 also signs out the CLI sessions created with the key.
+r.delete("/api-keys/:id", async (c) => {
+  const u = requireUser(c);
+  const id = c.req.param("id");
+  const db = c.env.DB;
+  const stmts = [stmt(db, "DELETE FROM api_keys WHERE id = ? AND user_id = ?", id, u.id)];
+  if (c.req.query("revoke_sessions") === "1")
+    stmts.push(stmt(db, "DELETE FROM sessions WHERE api_key_id = ? AND user_id = ?", id, u.id));
+  const [res] = await db.batch(stmts);
+  if (!res.meta.changes) throw notFound("API key");
   return c.body(null, 204);
 });
 

@@ -33,8 +33,11 @@ type Project struct {
 	StorageName string  `json:"storage_name"`
 	UsedBytes   int64   `json:"used_bytes"`
 	BlobCount   int64   `json:"blob_count"`
-	CreatedAt   int64   `json:"created_at"`
-	UpdatedAt   int64   `json:"updated_at"`
+	// InboxEnabled: the project accepts anonymous uploads; InboxURL is only sent to editors and owners.
+	InboxEnabled bool    `json:"inbox_enabled"`
+	InboxURL     *string `json:"inbox_url"`
+	CreatedAt    int64   `json:"created_at"`
+	UpdatedAt    int64   `json:"updated_at"`
 }
 
 type Member struct {
@@ -57,6 +60,7 @@ type Blob struct {
 	Size          int64    `json:"size"`
 	ContentType   string   `json:"content_type"`
 	Uploader      *UserRef `json:"uploader"`
+	ViaInbox      bool     `json:"via_inbox"` // uploaded anonymously through the project inbox
 	DownloadCount int64    `json:"download_count"`
 	CreatedAt     int64    `json:"created_at"`
 	UpdatedAt     int64    `json:"updated_at"`

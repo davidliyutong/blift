@@ -1,9 +1,12 @@
-import { http, qs } from "./client";
+import { http, qs, request } from "./client";
 import type {
   AdminStorage,
+  ApiKey,
   AdminUser,
   Blob,
   CliLoginRequest,
+  InboxInfo,
+  InboxUploadInit,
   Info,
   Member,
   Project,
@@ -45,6 +48,11 @@ export const api = {
       http.post<void>("/api/auth/password", body),
     sessions: () => http.get<{ sessions: Session[] }>("/api/auth/sessions"),
     revokeSession: (id: string) => http.del(`/api/auth/sessions/${enc(id)}`),
+    apiKeys: () => http.get<{ api_keys: ApiKey[] }>("/api/auth/api-keys"),
+    createApiKey: (body: { name: string; max_uses?: number | null; expires_in?: number | null }) =>
+      http.post<ApiKey & { key: string }>("/api/auth/api-keys", body),
+    deleteApiKey: (id: string, revokeSessions: boolean) =>
+      http.del(`/api/auth/api-keys/${enc(id)}${qs({ revoke_sessions: revokeSessions ? 1 : undefined })}`),
   },
 
   cli: {
@@ -61,8 +69,9 @@ export const api = {
     create: (body: { name: string; description?: string; storage_id?: string }) =>
       http.post<Project>("/api/projects", body),
     get: (id: string) => http.get<Project>(`/api/projects/${enc(id)}`),
-    update: (id: string, body: { name?: string; description?: string }) =>
+    update: (id: string, body: { name?: string; description?: string; inbox_enabled?: boolean }) =>
       http.patch<Project>(`/api/projects/${enc(id)}`, body),
+    resetInbox: (id: string) => http.post<Project>(`/api/projects/${enc(id)}/inbox/reset`),
     remove: (id: string) => http.del(`/api/projects/${enc(id)}`),
     members: (id: string) => http.get<{ members: Member[] }>(`/api/projects/${enc(id)}/members`),
     addMember: (id: string, user: string, role: ProjectRole) =>
@@ -125,6 +134,29 @@ export const api = {
       http.post<{ access_token: string }>(`/api/public/shares/${enc(token)}/unlock`, { password }),
     downloadHref: (token: string, blobId: string, access?: string) =>
       `/api/public/shares/${enc(token)}/blobs/${enc(blobId)}/download${qs({ redirect: 1, access_token: access })}`,
+  },
+
+  /** Anonymous uploads through a project inbox (/i/:token); no login. */
+  inbox: {
+    get: (token: string) => http.get<InboxInfo>(`/api/public/inbox/${enc(token)}`),
+    init: (token: string, body: { name: string; size: number; content_type?: string }) =>
+      http.post<InboxUploadInit>(`/api/public/inbox/${enc(token)}/uploads`, body),
+    parts: (token: string, blobId: string, uploadToken: string, part_numbers: number[]) =>
+      http.post<{ urls: Record<string, string>; expires_at: number }>(
+        `/api/public/inbox/${enc(token)}/uploads/${enc(blobId)}/parts`,
+        { part_numbers },
+        { headers: { "X-Upload-Token": uploadToken } },
+      ),
+    complete: (token: string, blobId: string, uploadToken: string) =>
+      http.post<{ name: string; size: number }>(
+        `/api/public/inbox/${enc(token)}/uploads/${enc(blobId)}/complete`,
+        {},
+        { headers: { "X-Upload-Token": uploadToken } },
+      ),
+    abort: (token: string, blobId: string, uploadToken: string) =>
+      request<void>("DELETE", `/api/public/inbox/${enc(token)}/uploads/${enc(blobId)}`, undefined, {
+        headers: { "X-Upload-Token": uploadToken },
+      }),
   },
 
   admin: {

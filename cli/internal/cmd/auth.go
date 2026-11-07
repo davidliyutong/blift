@@ -19,7 +19,7 @@ import (
 
 func loginCmd() *cobra.Command {
 	var noBrowser bool
-	var token string
+	var token, apiKey string
 	c := &cobra.Command{
 		Use:   "login",
 		Short: i18n.T("cmd.login"),
@@ -34,12 +34,22 @@ func loginCmd() *cobra.Command {
 				return errors.New(i18n.T("no_server"))
 			}
 			ctx, cl := cmd.Context(), api.New(server, token)
+			if apiKey == "" && token == "" {
+				apiKey = os.Getenv("BLIFT_API_KEY")
+			}
 			var user *api.User
-			if token != "" {
+			switch {
+			case token != "":
 				if user, err = cl.Me(ctx); err != nil {
 					return err
 				}
-			} else {
+			case apiKey != "":
+				res, err := cl.LoginWithAPIKey(ctx, apiKey, clientName())
+				if err != nil {
+					return err
+				}
+				token, user = res.Token, &res.User
+			default:
 				res, err := deviceLogin(ctx, cl, !noBrowser)
 				if err != nil {
 					return err
@@ -59,12 +69,19 @@ func loginCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&noBrowser, "no-browser", false, i18n.T("flag.no_browser"))
 	c.Flags().StringVar(&token, "token", "", i18n.T("flag.token"))
+	c.Flags().StringVar(&apiKey, "api-key", "", i18n.T("flag.api_key"))
+	c.MarkFlagsMutuallyExclusive("token", "api-key")
 	return c
 }
 
-func deviceLogin(ctx context.Context, cl *api.Client, browser bool) (*api.LoginResult, error) {
+// clientName names this machine in the sessions list of the web UI.
+func clientName() string {
 	host, _ := os.Hostname()
-	dl, err := cl.StartCLILogin(ctx, "blift-cli on "+host)
+	return "blift-cli on " + host
+}
+
+func deviceLogin(ctx context.Context, cl *api.Client, browser bool) (*api.LoginResult, error) {
+	dl, err := cl.StartCLILogin(ctx, clientName())
 	if err != nil {
 		return nil, err
 	}

@@ -107,6 +107,7 @@ func projectInfoCmd() *cobra.Command {
 				"col.storage", fmt.Sprintf("%s (%s)", p.StorageName, p.StorageID),
 				"col.files", strconv.FormatInt(p.BlobCount, 10),
 				"col.size", ui.Size(p.UsedBytes),
+				"col.inbox", inboxText(p),
 				"col.created", ui.Time(p.CreatedAt),
 				"col.updated", ui.Time(p.UpdatedAt))
 			return nil
@@ -254,4 +255,15 @@ func orJSON(err error, v any) error {
 		return err
 	}
 	return printJSON(v)
+}
+
+// inboxText shows the anonymous upload link (editors and owners), else whether the inbox is on.
+func inboxText(p *api.Project) string {
+	switch {
+	case p.InboxURL != nil:
+		return *p.InboxURL
+	case p.InboxEnabled:
+		return i18n.T("yes")
+	}
+	return i18n.T("inbox.off")
 }

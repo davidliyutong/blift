@@ -27,6 +27,15 @@ wait $LOGIN_PID || fail "login failed: $(cat "$WORK/login.out")"
 "$BLIFT" whoami | grep -q admin || fail "whoami"
 ok "blift login (device flow, code $CODE)"
 
+# Unattended login with a single-use API key, each in a fresh config.
+KEY=$(j -X POST "$BASE/api/auth/api-keys" -d '{"name":"cli-smoke","max_uses":1}' | grep -oE 'bliftk_[0-9A-Za-z]{32}')
+[ -n "$KEY" ] || fail "create API key"
+XDG_CONFIG_HOME="$WORK/config-key" BLIFT_API_KEY="$KEY" "$BLIFT" login --server "$BASE" >/dev/null 2>&1 || fail "login with BLIFT_API_KEY"
+XDG_CONFIG_HOME="$WORK/config-key" "$BLIFT" whoami | grep -q admin || fail "whoami after API key login"
+XDG_CONFIG_HOME="$WORK/config-key2" "$BLIFT" login --server "$BASE" --api-key "$KEY" 2>"$WORK/key.err" && fail "single-use key accepted twice"
+grep -q "invalid, expired or used up" "$WORK/key.err" || fail "used-up key message: $(cat "$WORK/key.err")"
+ok "blift login with BLIFT_API_KEY / --api-key (single use)"
+
 "$BLIFT" project create demo -d "cli smoke" >/dev/null
 "$BLIFT" project ls | grep -q demo || fail "project ls"
 ok "project create / ls"

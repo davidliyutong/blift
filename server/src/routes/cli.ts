@@ -122,6 +122,33 @@ r.post("/login/poll", async (c) => {
   return c.json({ token, user: toUser(user, await getSettings(c.env.DB)) });
 });
 
+// Unattended login with an API key (Account → API keys): `blift login --api-key`, or install.sh
+// with BLIFT_API_KEY. Each use creates a CLI session linked to the key.
+r.post("/login/api-key", async (c) => {
+  const b = await body(c);
+  const key = str(b.api_key, "api_key", 128);
+  const clientName = optStr(b.client_name, "client_name", 100) ?? "blift-cli";
+  const db = c.env.DB;
+  const t = now();
+  const invalid = () => new ApiError(401, "invalid_api_key", "API key is invalid, expired or used up");
+  const row = await one<UserRow & { key_id: string }>(
+    db,
+    `SELECT u.*, k.id AS key_id FROM api_keys k JOIN users u ON u.id = k.user_id
+     WHERE k.key_hash = ? AND (k.expires_at IS NULL OR k.expires_at > ?) AND (k.max_uses IS NULL OR k.use_count < k.max_uses)`,
+    await sha256Hex(key),
+    t,
+  );
+  if (!row) throw invalid();
+  const { key_id: keyId, ...user } = row;
+  if (user.status !== "active") throw new ApiError(403, "account_disabled", "account disabled");
+  // Count the use first; the WHERE clause enforces max_uses atomically.
+  if (!(await run(db, "UPDATE api_keys SET use_count = use_count + 1, last_used_at = ? WHERE id = ? AND (max_uses IS NULL OR use_count < max_uses)", t, keyId)))
+    throw invalid();
+  const token = await createSession(c, user.id, "cli", clientName, false, keyId);
+  c.set("statsUser", user.id);
+  return c.json({ token, user: toUser(user, await getSettings(db)) });
+});
+
 const findPending = async (c: Parameters<typeof requireUser>[0]) => {
   const code = c.req.param("code")!.toUpperCase();
   const row = await one<LoginRow>(c.env.DB, "SELECT * FROM cli_logins WHERE user_code = ?", code);

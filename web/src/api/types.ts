@@ -46,6 +46,10 @@ export interface Project {
   storage_name: string;
   used_bytes: number;
   blob_count: number;
+  /** The project accepts anonymous uploads at inbox_url. */
+  inbox_enabled: boolean;
+  /** Only sent to editors and owners. */
+  inbox_url: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -57,6 +61,8 @@ export interface Blob {
   size: number;
   content_type: string;
   uploader: UserRef | null;
+  /** Uploaded anonymously through the project's inbox. */
+  via_inbox: boolean;
   download_count: number;
   created_at: number;
   updated_at: number;
@@ -93,6 +99,22 @@ export interface Session {
   last_used_at: number | null;
   expires_at: number;
   current: boolean;
+  /** The API key this CLI session was created with. */
+  api_key_name: string | null;
+}
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  /** First characters of the key, e.g. "bliftk_AbCd". */
+  prefix: string;
+  max_uses: number | null;
+  use_count: number;
+  expires_at: number | null;
+  last_used_at: number | null;
+  created_at: number;
+  /** Active CLI sessions created with this key. */
+  session_count: number;
 }
 
 export interface StorageSummary {
@@ -111,6 +133,15 @@ export interface UploadInit {
   part_size?: number;
   part_count?: number;
   expires_at: number;
+}
+
+export interface InboxInfo {
+  inbox: { name: string; description: string; owner: string };
+}
+
+export interface InboxUploadInit extends UploadInit {
+  /** Sent as X-Upload-Token on the parts / complete / abort calls of this upload. */
+  upload_token: string;
 }
 
 export interface CliLoginRequest {
