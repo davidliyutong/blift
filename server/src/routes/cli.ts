@@ -8,7 +8,7 @@ import { sha256Hex } from "../lib/crypto";
 import { ApiError, notFound } from "../lib/errors";
 import { body, optStr, publicOrigin, str } from "../lib/http";
 import { newUserCode, randomString } from "../lib/ids";
-import { installScript, RELEASE_DOWNLOADS } from "../lib/install";
+import { installScript, RELEASE_DOWNLOADS, RELEASES } from "../lib/install";
 import { getSettings } from "../services/settings";
 import { toUser } from "../services/users";
 import { VERSION } from "../version";
@@ -34,6 +34,21 @@ const r = new Hono<AppEnv>();
 r.get("/install.sh", (c) =>
   c.body(installScript(publicOrigin(c), VERSION), 200, { "content-type": "text/plain; charset=utf-8" }),
 );
+
+// The latest published CLI release, for `blift update` on machines that cannot reach GitHub.
+// GitHub's /releases/latest page redirects to the tag (no API rate limit); the answer is kept
+// for an hour per isolate / process.
+let latest: { version: string; until: number } | null = null;
+
+r.get("/latest", async (c) => {
+  if (!latest || latest.until < Date.now()) {
+    const res = await fetch(`${RELEASES}/latest`, { redirect: "manual", headers: { "user-agent": `blift-server/${VERSION}` } });
+    const tag = /\/releases\/tag\/v(\d+\.\d+\.\d+[0-9A-Za-z.-]*)$/.exec(res.headers.get("location") ?? "")?.[1];
+    if (!tag) throw new ApiError(502, "upstream_error", `GitHub Releases answered HTTP ${res.status}`);
+    latest = { version: tag, until: Date.now() + 3_600_000 };
+  }
+  return c.json({ version: latest.version });
+});
 
 // CLI release files relayed from GitHub Releases, for clients that cannot reach GitHub (install.sh
 // tries this first). Only blift's own release files, which never change once published; Workers

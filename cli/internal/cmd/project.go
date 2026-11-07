@@ -52,9 +52,10 @@ func projectLsCmd() *cobra.Command {
 func projectCreateCmd() *cobra.Command {
 	var desc, storage string
 	c := &cobra.Command{
-		Use:   "create <name>",
-		Short: i18n.T("cmd.project.create"),
-		Args:  cobra.ExactArgs(1),
+		Use:               "create <name>",
+		Short:             i18n.T("cmd.project.create"),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeNothing,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := client()
 			if err != nil {
@@ -83,14 +84,16 @@ func projectCreateCmd() *cobra.Command {
 	}
 	c.Flags().StringVarP(&desc, "description", "d", "", i18n.T("flag.description"))
 	c.Flags().StringVar(&storage, "storage", "", i18n.T("flag.storage"))
+	_ = c.RegisterFlagCompletionFunc("storage", completeStorages)
 	return c
 }
 
 func projectInfoCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "info <project>",
-		Short: i18n.T("cmd.project.info"),
-		Args:  cobra.ExactArgs(1),
+		Use:               "info <project>",
+		Short:             i18n.T("cmd.project.info"),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeArgs(completeProjects, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, p, err := projectWithClient(cmd.Context(), args[0])
 			if err != nil || jsonOut {
@@ -114,10 +117,11 @@ func projectInfoCmd() *cobra.Command {
 func projectRmCmd() *cobra.Command {
 	var yes bool
 	c := &cobra.Command{
-		Use:     "rm <project>",
-		Aliases: []string{"delete"},
-		Short:   i18n.T("cmd.project.rm"),
-		Args:    cobra.ExactArgs(1),
+		Use:               "rm <project>",
+		Aliases:           []string{"delete"},
+		Short:             i18n.T("cmd.project.rm"),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeArgs(completeProjects, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, p, err := projectWithClient(cmd.Context(), args[0])
 			if err != nil {
@@ -139,9 +143,10 @@ func projectRmCmd() *cobra.Command {
 
 func projectRenameCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rename <project> <new-name>",
-		Short: i18n.T("cmd.project.rename"),
-		Args:  cobra.ExactArgs(2),
+		Use:               "rename <project> <new-name>",
+		Short:             i18n.T("cmd.project.rename"),
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: completeArgs(completeProjects, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, p, err := projectWithClient(cmd.Context(), args[0])
 			if err != nil {
@@ -159,9 +164,10 @@ func projectRenameCmd() *cobra.Command {
 
 func projectMembersCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "members <project>",
-		Short: i18n.T("cmd.project.members"),
-		Args:  cobra.ExactArgs(1),
+		Use:               "members <project>",
+		Short:             i18n.T("cmd.project.members"),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeArgs(completeProjects, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, p, err := projectWithClient(cmd.Context(), args[0])
 			if err != nil {
@@ -184,9 +190,10 @@ func projectMembersCmd() *cobra.Command {
 func projectAddMemberCmd() *cobra.Command {
 	var role string
 	c := &cobra.Command{
-		Use:   "add-member <project> <user>",
-		Short: i18n.T("cmd.project.add_member"),
-		Args:  cobra.ExactArgs(2),
+		Use:               "add-member <project> <user>",
+		Short:             i18n.T("cmd.project.add_member"),
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: completeArgs(completeProjects, completeUsers, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if role != "editor" && role != "viewer" {
 				return errors.New(i18n.T("bad_role", role))
@@ -204,14 +211,16 @@ func projectAddMemberCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&role, "role", "viewer", i18n.T("flag.role"))
+	_ = c.RegisterFlagCompletionFunc("role", fixed("editor", "viewer"))
 	return c
 }
 
 func projectRmMemberCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm-member <project> <user>",
-		Short: i18n.T("cmd.project.rm_member"),
-		Args:  cobra.ExactArgs(2),
+		Use:               "rm-member <project> <user>",
+		Short:             i18n.T("cmd.project.rm_member"),
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: completeArgs(completeProjects, completeMembers, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, p, err := projectWithClient(cmd.Context(), args[0])
 			if err != nil {

@@ -128,6 +128,7 @@ click **Apply CORS**.
 | `APP_SECRET` | Signs cookies and tokens and encrypts stored credentials. Docker generates it into `/data/app-secret` when unset. |
 | `PORT`, `DATA_DIR`, `WEB_DIR` | Node only. Defaults: `8080`, `/data`, `/app/web`. |
 | `GC_BUDGET` | Maximum S3 requests per garbage-collection run (Node 1000, Workers 40). |
+| `GC_ROWS` | Maximum database rows garbage collection writes per run, in statements of at most 100 rows (Node 20000, Workers 5000). Deleting a project or many files only flags them; GC removes them over as many runs as needed. |
 
 Everything else (site name, default quota, storage backends, SSO) is configured in the web UI.
 
@@ -216,7 +217,10 @@ https://files.example.com/s/83aAZff7bSgz
 $ blift share get https://files.example.com/s/83aAZff7bSgz --password launch    # no account needed
 ```
 
-See [cli/README.md](cli/README.md) for all commands. The language follows `LANG`, or
+`blift update` replaces the binary with the latest release (through the server's relay, like the
+installer; `--check` only looks). Shell completion covers projects, file names (looked up by prefix on the server), shares and
+users: `blift completion zsh|bash|fish` prints the script. See [cli/README.md](cli/README.md) for
+all commands. The language follows `LANG`, or
 `--lang zh|en` / `BLIFT_LANG`.
 
 ## Design notes and Cloudflare limits

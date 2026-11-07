@@ -133,8 +133,12 @@ export interface PublicShareInfo {
     download_count: number;
     creator: string;
     created_at: number;
+    file_count?: number;
+    total_bytes?: number;
   };
   blobs?: PublicBlob[];
+  /** Set when a project share has more files than this page (pass it as `cursor`). */
+  next_cursor?: string | null;
 }
 
 export interface PublicBlob {

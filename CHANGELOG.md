@@ -6,8 +6,36 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- CLI shell completion for projects, file names (prefix lookup on the server), shares, members,
+  users and flag values: `blift completion zsh|bash|fish`.
+- `blift update` replaces the CLI with the latest release (or `--version`), looked up and
+  downloaded through the blift server (`GET /api/cli/latest` and the download relay) with GitHub
+  as the fallback, SHA-256 verified; `--check` only reports.
+- `blift ls` lists at most 100 files by default and says how many there are; `-n/--limit`,
+  `-a/--all` and `--query` widen or filter it.
+- File listing API: cursor paging (`next_cursor`), `prefix` and exact `name` filters. Public
+  project shares are paged too (`next_cursor`, `file_count`, `total_bytes`); the share page loads
+  more files on demand.
+
+### Fixed
+
+- Large projects: listings are read in index order (new indexes), so a page no longer sorts and
+  counts every file of the project; the CLI resolves file names with an exact lookup instead of
+  listing the whole project; public project shares are no longer cut off at 5,000 files.
+- Mass deletes: deleting a project (or a user's projects) is constant work; GC releases its files,
+  shares and members afterwards. Every GC write touches at most 100 rows, each run writes at most
+  `GC_ROWS` rows, and the work is shared fairly so one backlog cannot starve the rest. A storage
+  that cannot be reached is skipped instead of blocking the queue. Bulk delete takes ≤ 100 ids per
+  request (the CLI and web UI send larger sets in batches).
+- The admin dashboard no longer counts every file on each load.
+
 ### Changed
 
+- `blift ls` (also with `--json`) returns 100 files unless `-n/--limit` or `-a/--all` says
+  otherwise; scripts that need every file should add `--all`.
+- `POST /api/projects/:id/blobs/delete` accepts at most 100 ids per request (was 500).
 - New flowing **b** logo with a lifted wing, shared by the web UI, favicon and READMEs.
   The navigation logo gently lifts on hover or keyboard focus and respects reduced-motion preferences.
 

@@ -36,7 +36,7 @@ r.get("/stats", async (c) => {
       `SELECT
          (SELECT COUNT(*) FROM users) AS users,
          (SELECT COUNT(*) FROM projects WHERE status = 'active') AS projects,
-         (SELECT COUNT(*) FROM blobs WHERE status = 'active') AS blobs,
+         (SELECT COALESCE(SUM(blob_count), 0) FROM projects WHERE status = 'active') AS blobs,
          (SELECT COALESCE(SUM(used_bytes), 0) FROM projects WHERE status = 'active') AS used_bytes,
          (SELECT COUNT(*) FROM shares) AS shares,
          (SELECT COUNT(*) FROM storages) AS storages`,

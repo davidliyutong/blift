@@ -113,6 +113,7 @@ docker run -d -p 9000:9000 -e RUSTFS_ACCESS_KEY=blift -e RUSTFS_SECRET_KEY=blift
 | `APP_SECRET` | 签名 Cookie / 令牌并加密已保存的凭据；Docker 下未设置则自动生成到 `/data/app-secret` |
 | `PORT`、`DATA_DIR`、`WEB_DIR` | 仅 Node。默认 `8080`、`/data`、`/app/web` |
 | `GC_BUDGET` | 每轮垃圾回收最多发起的 S3 请求数（Node 1000，Workers 40） |
+| `GC_ROWS` | 每轮垃圾回收最多写入的数据库行数，每条语句不超过 100 行（Node 20000，Workers 5000）。删除项目或大量文件时只做标记，由 GC 分多轮清理 |
 
 其余配置（站点名称、默认配额、存储后端、SSO）都在 Web 管理页里完成。
 
@@ -185,6 +186,7 @@ $ blift share create release-builds CHANGELOG.md --password launch --expires 7d
 $ blift share get https://files.example.com/s/83aAZff7bSgz --password launch    # 无需登录
 ```
 
+`blift update` 原地更新到最新版本（与安装脚本一样经服务器中转下载；`--check` 只检查）。Shell 补全覆盖项目、文件名（按前缀向服务器查询）、分享与用户：`blift completion zsh|bash|fish` 输出补全脚本。
 全部命令见 [cli/README.md](cli/README.md)。界面语言跟随 `LANG`，或用 `--lang zh|en` / `BLIFT_LANG`。
 
 ## 设计取舍与 Cloudflare 限制

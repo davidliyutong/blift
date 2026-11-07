@@ -77,10 +77,11 @@ func newRoot() *cobra.Command {
 	pf.StringVar(&flagLang, "lang", "", i18n.T("flag.lang"))
 	pf.BoolVar(&jsonOut, "json", false, i18n.T("flag.json"))
 	pf.BoolVarP(&quiet, "quiet", "q", false, i18n.T("flag.quiet"))
+	_ = root.RegisterFlagCompletionFunc("lang", fixed("zh", "en"))
 	root.AddCommand(
 		loginCmd(), logoutCmd(), whoamiCmd(), versionCmd(),
 		projectCmd(), lsCmd(), uploadCmd(), downloadCmd(), rmCmd(), mvCmd(), urlCmd(),
-		shareCmd(),
+		shareCmd(), updateCmd(),
 	)
 	return root
 }

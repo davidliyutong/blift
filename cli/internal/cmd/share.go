@@ -50,9 +50,10 @@ func shareCreateCmd() *cobra.Command {
 	var password, expires string
 	var maxDownloads int64
 	c := &cobra.Command{
-		Use:   "create <project> [blob]",
-		Short: i18n.T("cmd.share.create"),
-		Args:  cobra.RangeArgs(1, 2),
+		Use:               "create <project> [blob]",
+		Short:             i18n.T("cmd.share.create"),
+		Args:              cobra.RangeArgs(1, 2),
+		ValidArgsFunction: completeArgs(completeProjects, completeBlobs, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := api.CreateShare{Password: password, MaxDownloads: maxDownloads}
 			if expires != "" {
@@ -87,15 +88,17 @@ func shareCreateCmd() *cobra.Command {
 	c.Flags().StringVar(&password, "password", "", i18n.T("flag.share_password"))
 	c.Flags().StringVar(&expires, "expires", "", i18n.T("flag.expires"))
 	c.Flags().Int64Var(&maxDownloads, "max-downloads", 0, i18n.T("flag.max_downloads"))
+	_ = c.RegisterFlagCompletionFunc("expires", fixed("1h", "1d", "7d", "30d"))
 	return c
 }
 
 func shareLsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "ls [project]",
-		Aliases: []string{"list"},
-		Short:   i18n.T("cmd.share.ls"),
-		Args:    cobra.MaximumNArgs(1),
+		Use:               "ls [project]",
+		Aliases:           []string{"list"},
+		Short:             i18n.T("cmd.share.ls"),
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: completeArgs(completeProjects, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			c, err := client()
@@ -135,10 +138,11 @@ func shareLsCmd() *cobra.Command {
 
 func shareRmCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "rm <share-id>",
-		Aliases: []string{"delete"},
-		Short:   i18n.T("cmd.share.rm"),
-		Args:    cobra.ExactArgs(1),
+		Use:               "rm <share-id>",
+		Aliases:           []string{"delete"},
+		Short:             i18n.T("cmd.share.rm"),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeArgs(completeShares, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := client()
 			if err != nil {
@@ -179,9 +183,10 @@ func shareGetCmd() *cobra.Command {
 	var password, out string
 	var jobs int
 	c := &cobra.Command{
-		Use:   "get <share-url-or-token> [blob...]",
-		Short: i18n.T("cmd.share.get"),
-		Args:  cobra.MinimumNArgs(1),
+		Use:               "get <share-url-or-token> [blob...]",
+		Short:             i18n.T("cmd.share.get"),
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeNothing,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
@@ -230,9 +235,12 @@ func shareGetCmd() *cobra.Command {
 // openShare fetches a public share, unlocking it with the password (prompting on a
 // terminal when none was given) if it is locked. It returns the X-Share-Access token.
 func openShare(ctx context.Context, c *api.Client, token, password string) (*api.PublicShare, string, error) {
-	sh, err := c.PublicShare(ctx, token, "")
-	if err != nil || !sh.Share.Locked {
-		return sh, "", err
+	sh, err := c.PublicShare(ctx, token, "", "")
+	if err != nil {
+		return nil, "", err
+	}
+	if !sh.Share.Locked {
+		return sh, "", allShareFiles(ctx, c, token, "", sh)
 	}
 	if password == "" {
 		if !ui.IsTTY(os.Stdin) {
@@ -246,6 +254,22 @@ func openShare(ctx context.Context, c *api.Client, token, password string) (*api
 	if err != nil {
 		return nil, "", err
 	}
-	sh, err = c.PublicShare(ctx, token, access)
-	return sh, access, err
+	if sh, err = c.PublicShare(ctx, token, access, ""); err != nil {
+		return nil, "", err
+	}
+	return sh, access, allShareFiles(ctx, c, token, access, sh)
+}
+
+// allShareFiles appends the remaining pages of a project share's file list.
+func allShareFiles(ctx context.Context, c *api.Client, token, access string, sh *api.PublicShare) error {
+	for cursor := sh.NextCursor; cursor != ""; {
+		page, err := c.PublicShare(ctx, token, access, cursor)
+		if err != nil {
+			return err
+		}
+		sh.Blobs = append(sh.Blobs, page.Blobs...)
+		cursor = page.NextCursor
+	}
+	sh.NextCursor = ""
+	return nil
 }

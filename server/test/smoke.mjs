@@ -176,7 +176,9 @@ const archive = Buffer.from(await (await relay("v0.1.0/blift_0.1.0_linux_amd64.t
 assert.ok(sums.includes(`${sha(archive)}  blift_0.1.0_linux_amd64.tar.gz`), "relayed archive matches SHA256SUMS");
 for (const p of ["v0.1.0/blift_0.2.0_linux_amd64.tar.gz", "v0.1.0/README.md", "latest/SHA256SUMS", "v0.1.0/..%2F..%2Fx"])
   assert.equal((await relay(p)).status, 404, p);
-step(`CLI download relay (${archive.length} bytes, checksum ok; other paths 404)`);
+const latestRes = await api("GET", "/api/cli/latest", undefined, { auth: null });
+assert.match(latestRes.version, /^\d+\.\d+\.\d+/);
+step(`CLI download relay (${archive.length} bytes, checksum ok; other paths 404), latest release v${latestRes.version}`);
 
 const storageCfg = {
   name: "local",
@@ -237,6 +239,39 @@ const pd1 = await api("GET", `/api/public/shares/${share1.token}/blobs/${b1v2.id
 assert.equal((await fetchBytes(pd1.url)).data.toString(), "version 2");
 step("overwrite upload; share follows the new version");
 
+// Listing a larger project: keyset cursors, prefix and exact-name lookups, paged public shares.
+const lp = await api("POST", "/api/projects", { name: "listing" }, { expect: 201 });
+const names = ["Alpha.txt", "alpha-2.txt", "beta.txt", "Gamma.log", "gamma.txt", "delta 1.txt", "delta 2.txt"];
+for (const n of names) await upload(lp.id, n, Buffer.from(n));
+const ordered = (await api("GET", `/api/projects/${lp.id}/blobs?sort=name&order=asc&limit=100`)).blobs.map((b) => b.name);
+assert.equal(ordered.length, names.length);
+const walked = [];
+let pageRes = await api("GET", `/api/projects/${lp.id}/blobs?sort=name&order=asc&limit=3`);
+assert.equal(pageRes.total, names.length);
+for (;;) {
+  walked.push(...pageRes.blobs.map((b) => b.name));
+  if (!pageRes.next_cursor) break;
+  pageRes = await api("GET", `/api/projects/${lp.id}/blobs?sort=name&order=asc&limit=3&cursor=${encodeURIComponent(pageRes.next_cursor)}`);
+  assert.equal(pageRes.total, undefined);
+}
+assert.deepEqual(walked, ordered);
+const byPrefix = await api("GET", `/api/projects/${lp.id}/blobs?prefix=GAM&sort=name&order=asc`);
+assert.deepEqual(byPrefix.blobs.map((b) => b.name).sort(), ["Gamma.log", "gamma.txt"]);
+assert.equal(byPrefix.total, 2);
+const byName = await api("GET", `/api/projects/${lp.id}/blobs?name=${encodeURIComponent("delta 2.txt")}&name=beta.txt&name=nope`);
+assert.deepEqual(byName.blobs.map((b) => b.name).sort(), ["beta.txt", "delta 2.txt"]);
+const nameCursor = (await api("GET", `/api/projects/${lp.id}/blobs?sort=name&limit=1`)).next_cursor;
+assert.equal(await errCode(api("GET", `/api/projects/${lp.id}/blobs?sort=size&cursor=${encodeURIComponent(nameCursor)}`, undefined, { expect: 400 })), "bad_request");
+const lshare = await api("POST", "/api/shares", { project_id: lp.id }, { expect: 201 });
+const pubPage1 = await api("GET", `/api/public/shares/${lshare.token}?limit=4`, undefined, { auth: null });
+assert.equal(pubPage1.share.file_count, names.length);
+assert.equal(pubPage1.share.total_bytes, names.reduce((n, x) => n + Buffer.byteLength(x), 0));
+assert.equal(pubPage1.blobs.length, 4);
+const pubPage2 = await api("GET", `/api/public/shares/${lshare.token}?limit=4&cursor=${encodeURIComponent(pubPage1.next_cursor)}`, undefined, { auth: null });
+assert.equal(pubPage2.next_cursor, null);
+assert.deepEqual([...pubPage1.blobs, ...pubPage2.blobs].map((b) => b.name), ordered);
+step(`listing: cursor pages, prefix, exact names, paged public share (${names.length} files)`);
+
 const share2 = await api("POST", "/api/shares", { project_id: project.id, password: "s3cret", max_downloads: 1, expires_in: 3600 }, { expect: 201 });
 assert.equal(share2.has_password, true);
 const locked = await api("GET", `/api/public/shares/${share2.token}`, undefined, { auth: null });
@@ -294,7 +329,7 @@ const tok = await api("POST", "/api/cli/login/poll", { device_code: dev.device_c
 assert.match(tok.token, /^blift_/);
 assert.equal(await errCode(api("POST", "/api/cli/login/poll", { device_code: dev.device_code }, { auth: null, expect: 400 })), "expired_token");
 const viaToken = await api("GET", "/api/projects", undefined, { auth: tok.token });
-assert.equal(viaToken.projects.length, 1);
+assert.deepEqual(viaToken.projects.map((p) => p.name).sort(), ["demo", "listing"]);
 step("CLI device login (pending → approved → token, single use)");
 
 // Members
@@ -325,10 +360,15 @@ assert.equal(gc1.result.projects_purged, 1); // the empty demo2 project
 assert.equal(gc2.result.projects_purged, 1);
 step(`GC removes objects (${gc1.result.objects_deleted}) and purges deleted projects`);
 
+await api("DELETE", `/api/projects/${lp.id}`, undefined, { expect: 204 }); // releases its usage at once
 const stats = await api("GET", "/api/admin/stats?days=7");
 assert.equal(stats.series.length, 7);
 const today = stats.series.at(-1);
-assert.ok(today.requests > 20 && today.uploads === 3 && today.upload_bytes === small.length + big.length + small2.length, JSON.stringify(today));
+const listingBytes = names.reduce((n, x) => n + Buffer.byteLength(x), 0);
+assert.ok(
+  today.requests > 20 && today.uploads === 3 + names.length && today.upload_bytes === small.length + big.length + small2.length + listingBytes,
+  JSON.stringify(today),
+);
 const users = await api("GET", "/api/admin/users");
 assert.ok(users.users.every((u) => u.used_bytes === 0), "usage released after deletes");
 assert.equal(users.total, 3);

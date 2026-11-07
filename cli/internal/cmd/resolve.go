@@ -52,25 +52,32 @@ func resolveProject(ctx context.Context, c *api.Client, arg string) (*api.Projec
 	return nil, errors.New(i18n.T("project.ambiguous", arg, strings.Join(cands, "\n")))
 }
 
-// resolveBlobs maps blob names (or ids) to blobs by listing the project.
+// resolveBlobs maps blob names (or ids) to blobs. Names are looked up exactly (50 per request),
+// so this stays cheap however large the project is; arguments that match no name are tried
+// as blob ids.
 func resolveBlobs(ctx context.Context, c *api.Client, projectID string, args []string) ([]api.Blob, error) {
-	blobs, err := c.Blobs(ctx, projectID, "", "")
+	named, err := c.BlobsNamed(ctx, projectID, args)
 	if err != nil {
 		return nil, err
 	}
-	byID, byName := map[string]api.Blob{}, map[string]api.Blob{}
-	for _, b := range blobs {
-		byID[b.ID], byName[b.Name] = b, b
+	byName := map[string]api.Blob{}
+	for _, b := range named {
+		byName[b.Name] = b
 	}
 	out := make([]api.Blob, 0, len(args))
 	for _, a := range args {
-		b, ok := byID[a]
-		if !ok {
-			if b, ok = byName[a]; !ok {
-				return nil, errors.New(i18n.T("blob.not_found", a))
-			}
+		if b, ok := byName[a]; ok {
+			out = append(out, b)
+			continue
 		}
-		out = append(out, b)
+		b, err := c.Blob(ctx, a)
+		if err != nil && !api.IsCode(err, "not_found") {
+			return nil, err
+		}
+		if err != nil || b.ProjectID != projectID {
+			return nil, errors.New(i18n.T("blob.not_found", a))
+		}
+		out = append(out, *b)
 	}
 	return out, nil
 }

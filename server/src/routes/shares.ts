@@ -9,7 +9,7 @@ import { ApiError, badRequest, forbidden, notFound } from "../lib/errors";
 import { body, int, publicOrigin, str } from "../lib/http";
 import { newId, newShareToken } from "../lib/ids";
 import { signJwt, verifyJwt } from "../lib/jwt";
-import { loadProject, type BlobRow } from "../services/projects";
+import { listBlobs, loadProject, type BlobRow } from "../services/projects";
 import { addStats } from "../services/stats";
 import { storageFor } from "../services/storage";
 import { userRef } from "../services/users";
@@ -29,13 +29,17 @@ type ShareRow = {
   created_at: number;
   project_name: string;
   owner_id: string;
+  project_blob_count: number;
+  project_used_bytes: number;
   blob_name: string | null;
+  blob_size: number | null;
   creator_username: string | null;
   creator_display_name: string | null;
 };
 
 const SHARE_SELECT = `
-  SELECT s.*, p.name AS project_name, p.owner_id, b.name AS blob_name,
+  SELECT s.*, p.name AS project_name, p.owner_id, p.blob_count AS project_blob_count, p.used_bytes AS project_used_bytes,
+         b.name AS blob_name, b.size AS blob_size,
          u.username AS creator_username, u.display_name AS creator_display_name
   FROM shares s
   JOIN projects p ON p.id = s.project_id AND p.status = 'active'
@@ -67,7 +71,7 @@ shares.get("/", async (c) => {
   const u = requireUser(c);
   const projectId = c.req.query("project_id");
   const rows = projectId
-    ? await all<ShareRow>(c.env.DB, `${SHARE_SELECT} WHERE s.project_id = ? ORDER BY s.created_at DESC`, (await loadProject(c, projectId, "viewer")).id)
+    ? await all<ShareRow>(c.env.DB, `${SHARE_SELECT} WHERE s.project_id = ? ORDER BY s.created_at DESC LIMIT 1000`, (await loadProject(c, projectId, "viewer")).id)
     : await all<ShareRow>(
         c.env.DB,
         `${SHARE_SELECT} WHERE s.creator_id = ? OR p.owner_id = ? ORDER BY s.created_at DESC LIMIT 1000`,
@@ -142,19 +146,25 @@ async function isUnlocked(c: Ctx, s: ShareRow): Promise<boolean> {
   return claims?.sub === s.id && claims.typ === "share";
 }
 
+// Project shares list their files a page at a time (by name; `cursor` continues).
 publicShares.get("/:token", async (c) => {
   const s = await loadShare(c, c.req.param("token"));
   const unlocked = await isUnlocked(c, s);
-  c.executionCtx.waitUntil(run(c.env.DB, "UPDATE shares SET view_count = view_count + 1 WHERE id = ?", s.id));
-  const blobs = unlocked
-    ? await all<Pick<BlobRow, "id" | "name" | "size" | "content_type" | "created_at">>(
-        c.env.DB,
-        s.blob_id
-          ? "SELECT id, name, size, content_type, created_at FROM blobs WHERE id = ? AND status = 'active'"
-          : "SELECT id, name, size, content_type, created_at FROM blobs WHERE project_id = ? AND status = 'active' ORDER BY name COLLATE NOCASE LIMIT 5000",
-        s.blob_id ?? s.project_id,
-      )
-    : undefined;
+  const cursor = c.req.query("cursor") || undefined;
+  if (!cursor) c.executionCtx.waitUntil(run(c.env.DB, "UPDATE shares SET view_count = view_count + 1 WHERE id = ?", s.id));
+  let blobs: Pick<BlobRow, "id" | "name" | "size" | "content_type" | "created_at">[] | undefined;
+  let nextCursor: string | null = null;
+  if (unlocked && s.blob_id) {
+    blobs = await all(c.env.DB, "SELECT id, name, size, content_type, created_at FROM blobs WHERE id = ? AND status = 'active'", s.blob_id);
+  } else if (unlocked) {
+    const page = await listBlobs(
+      c.env.DB,
+      { id: s.project_id, blob_count: s.project_blob_count },
+      { sort: "name", order: "asc", limit: int(c.req.query("limit") ?? 5000, "limit", 1, 5000), cursor },
+    );
+    blobs = page.rows.map(({ id, name, size, content_type, created_at }) => ({ id, name, size, content_type, created_at }));
+    nextCursor = page.next_cursor;
+  }
   return c.json({
     share: {
       token: s.token,
@@ -167,8 +177,10 @@ publicShares.get("/:token", async (c) => {
       download_count: s.download_count,
       creator: s.creator_display_name || s.creator_username || "",
       created_at: s.created_at,
+      file_count: s.blob_id ? 1 : s.project_blob_count,
+      total_bytes: s.blob_id ? (s.blob_size ?? 0) : s.project_used_bytes,
     },
-    ...(blobs ? { blobs } : {}),
+    ...(blobs ? { blobs, next_cursor: nextCursor } : {}),
   });
 });
 

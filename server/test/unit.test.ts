@@ -12,6 +12,8 @@ import { blobName, projectName } from "../src/lib/http";
 import { newId, newShareToken, newToken, newUserCode } from "../src/lib/ids";
 import { installScript } from "../src/lib/install";
 import { contentDisposition, S3 } from "../src/lib/s3";
+import { runGc, WRITE_BATCH } from "../src/services/gc";
+import { BLOB_SORTS, listBlobs } from "../src/services/projects";
 import { base32Decode, base32Encode, totpCode, verifyTotp } from "../src/lib/totp";
 import { partSizeFor } from "../src/routes/uploads";
 
@@ -97,6 +99,136 @@ describe("uploads", () => {
     const ps = partSizeFor(huge);
     expect(ps % MiB).toBe(0);
     expect(Math.ceil(huge / ps)).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe("listBlobs", () => {
+  // Case variants tie under NOCASE, sizes and times repeat: keyset paging must still visit every
+  // row exactly once, in the same order as one big ordered query.
+  async function seed() {
+    const db = new NodeD1(":memory:");
+    await migrate(db);
+    const names = ["a.txt", "A.txt", "b.txt", "B.TXT", "report 2.pdf", "Report 10.pdf", "_x", "%y", "é.bin", "z"];
+    const stmts = [];
+    let i = 0;
+    for (const base of names)
+      for (let k = 0; k < 6; k++, i++)
+        stmts.push(
+          db
+            .prepare(
+              "INSERT INTO blobs (id, project_id, storage_id, object_key, name, size, content_type, status, created_at, updated_at) VALUES (?, 'p', 's', ?, ?, ?, 'x', ?, ?, ?)",
+            )
+            .bind(`id${(i * 7919) % 1000}`.padEnd(8, "0"), `k${i}`, k ? `${base}.${k}` : base, (i % 5) * 10, i % 9 ? "active" : "deleted", 1000 + (i % 4), 1),
+        );
+    stmts.push(db.prepare("INSERT INTO blobs (id, project_id, storage_id, object_key, name, size, content_type, status, created_at, updated_at) VALUES ('other', 'q', 's', 'k', 'a.txt', 1, 'x', 'active', 1, 1)"));
+    await db.batch(stmts);
+    const active = (await all<{ n: number }>(db, "SELECT COUNT(*) AS n FROM blobs WHERE project_id = 'p' AND status = 'active'"))[0].n;
+    return { db, project: { id: "p", blob_count: active } };
+  }
+
+  it.each(BLOB_SORTS.flatMap((sort) => (["asc", "desc"] as const).map((order) => [sort, order] as const)))(
+    "pages by %s %s with cursors",
+    async (sort, order) => {
+      const { db, project } = await seed();
+      const whole = await listBlobs(db, project, { sort, order, limit: 1000 });
+      expect(whole.next_cursor).toBeNull();
+      expect(whole.total).toBe(project.blob_count);
+      const ids: string[] = [];
+      let cursor: string | undefined;
+      let first = true;
+      do {
+        const page = await listBlobs(db, project, { sort, order, limit: 7, cursor });
+        expect(page.total).toBe(first ? project.blob_count : undefined);
+        ids.push(...page.rows.map((b) => b.id));
+        cursor = page.next_cursor ?? undefined;
+        first = false;
+      } while (cursor);
+      expect(ids).toEqual(whole.rows.map((b) => b.id));
+      db.close();
+    },
+  );
+
+  it("filters by prefix, exact names and substring", async () => {
+    const { db, project } = await seed();
+    const byPrefix = await listBlobs(db, project, { sort: "name", order: "asc", limit: 100, prefix: "rep" });
+    expect(byPrefix.rows.map((b) => b.name).every((n) => n.toLowerCase().startsWith("rep"))).toBe(true);
+    expect(byPrefix.total).toBe(byPrefix.rows.length);
+    expect(byPrefix.rows.length).toBeGreaterThan(0);
+    // "a.txt" was seeded as deleted: only active files match.
+    const exact = await listBlobs(db, project, { sort: "name", order: "asc", limit: 100, names: ["a.txt", "A.txt", "b.txt", "missing"] });
+    expect(exact.rows.map((b) => b.name).sort()).toEqual(["A.txt", "b.txt"]);
+    // LIKE wildcards in q are literal.
+    const pct = await listBlobs(db, project, { sort: "name", order: "asc", limit: 100, q: "%" });
+    expect(pct.rows.map((b) => b.name).every((n) => n.includes("%"))).toBe(true);
+    await expect(listBlobs(db, project, { sort: "size", order: "asc", limit: 5, cursor: "garbage" })).rejects.toThrow(/cursor/);
+    const page = await listBlobs(db, project, { sort: "name", order: "asc", limit: 5 });
+    await expect(listBlobs(db, project, { sort: "size", order: "asc", limit: 5, cursor: page.next_cursor! })).rejects.toThrow(/cursor/);
+    db.close();
+  });
+});
+
+describe("gc", () => {
+  // Wraps the database to record how many rows each single write statement changed.
+  function recording(db: NodeD1) {
+    const writes: number[] = [];
+    const wrapped = {
+      prepare(sql: string) {
+        const st = db.prepare(sql);
+        const wrap = (inner: typeof st): typeof st => ({
+          bind: (...v: unknown[]) => wrap(inner.bind(...v)),
+          first: (...a: []) => inner.first(...a),
+          all: (...a: []) => inner.all(...a),
+          run: async () => {
+            const r = await inner.run();
+            writes.push(r.meta.changes);
+            return r;
+          },
+        });
+        return wrap(st);
+      },
+      batch: (stmts: Parameters<NodeD1["batch"]>[0]) => db.batch(stmts),
+    };
+    return { wrapped, writes };
+  }
+
+  it("drains a deleted project and expired rows in small writes within the row budget", async () => {
+    const db = new NodeD1(":memory:");
+    await migrate(db);
+    const t = Date.now();
+    const seed = [db.prepare("INSERT INTO projects (id, name, owner_id, storage_id, status, created_at, updated_at) VALUES ('p', 'big', 'u', 'gone', 'deleting', 1, 1)")];
+    for (let i = 0; i < 250; i++)
+      seed.push(
+        db
+          .prepare("INSERT INTO blobs (id, project_id, storage_id, object_key, name, size, content_type, status, created_at, updated_at) VALUES (?, 'p', 'gone', ?, ?, 1, 'x', 'active', 1, 1)")
+          .bind(`b${i}`, `k${i}`, `f${i}`),
+      );
+    for (let i = 0; i < 130; i++)
+      seed.push(db.prepare("INSERT INTO shares (id, token, project_id, creator_id, created_at) VALUES (?, ?, 'p', 'u', 1)").bind(`s${i}`, `t${i}`));
+    for (let i = 0; i < 230; i++)
+      seed.push(
+        db
+          .prepare("INSERT INTO sessions (id, user_id, kind, created_at, expires_at, last_used_at) VALUES (?, 'u', 'web', 1, ?, 1)")
+          .bind(`x${i}`, t - 1000),
+      );
+    await db.batch(seed);
+
+    const { wrapped, writes } = recording(db);
+    const env = { DB: wrapped, APP_SECRET: "test-secret-0123456789abcdef0123456789" } as unknown as Parameters<typeof runGc>[0];
+    const first = await runGc(env, { rows: 150 });
+    expect(first.more).toBe(true);
+    expect(Math.max(...writes)).toBeLessThanOrEqual(WRITE_BATCH);
+    // The budget is checked before each statement, so a run may overshoot by one batch at most.
+    expect(writes.reduce((a, b) => a + b, 0)).toBeLessThan(150 + WRITE_BATCH);
+
+    for (let i = 0; i < 20; i++) await runGc(env, { rows: 150 });
+    expect(Math.max(...writes)).toBeLessThanOrEqual(WRITE_BATCH);
+    const left = async (sql: string) => (await all<{ n: number }>(db, sql))[0].n;
+    expect(await left("SELECT COUNT(*) AS n FROM blobs WHERE status != 'deleted'")).toBe(0);
+    expect(await left("SELECT COUNT(*) AS n FROM shares")).toBe(0);
+    expect(await left("SELECT COUNT(*) AS n FROM sessions")).toBe(0);
+    // Its storage is gone, so the objects (and the project) wait instead of blocking anything.
+    expect(await left("SELECT COUNT(*) AS n FROM projects")).toBe(1);
+    db.close();
   });
 });
 

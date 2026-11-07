@@ -148,6 +148,19 @@ CREATE TABLE stats_daily (
 );
 `,
   },
+  {
+    // Listing a large project: one index per sort, so pages are read in index order instead of
+    // sorting every file of the project on each request (see listBlobs). GC takes deleted files
+    // one storage at a time (blobs_gc).
+    name: "0002_list_indexes",
+    sql: `
+CREATE INDEX blobs_list_name ON blobs(project_id, name COLLATE NOCASE, id) WHERE status = 'active';
+CREATE INDEX blobs_list_created ON blobs(project_id, created_at, id) WHERE status = 'active';
+CREATE INDEX blobs_list_size ON blobs(project_id, size, id) WHERE status = 'active';
+CREATE INDEX shares_expires ON shares(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX blobs_gc ON blobs(storage_id, updated_at) WHERE status = 'deleted';
+`,
+  },
 ];
 
 const split = (sql: string) =>

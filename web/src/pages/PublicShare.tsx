@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router";
 import { Badge, Banner, Button, LinkButton, SensitiveInput } from "@cloudflare/kumo";
 import {
@@ -10,6 +10,7 @@ import {
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 import { api, ApiError } from "@/api";
+import type { PublicBlob } from "@/api/types";
 import { useI18n } from "@/i18n";
 import { useAsync } from "@/lib/hooks";
 import { useSession } from "@/lib/session";
@@ -20,15 +21,35 @@ import { Loading } from "@/components/Page";
 import { FileIcon } from "@/components/FileIcon";
 
 const accessKey = (token: string) => `blift.share.${token}`;
+/** Files per request; long project shares load further pages on demand. */
+const PAGE = 200;
 
 export function PublicSharePage() {
   const { t, lang, errMsg } = useI18n();
   const { info } = useSession();
   const { token = "" } = useParams();
   const [access, setAccess] = useState(() => sessionStorage.getItem(accessKey(token)) ?? undefined);
-  const res = useAsync(() => api.public.share(token, access), [token, access]);
+  const res = useAsync(() => api.public.share(token, access, { limit: PAGE }), [token, access]);
   const [unlocking, setUnlocking] = useState(false);
   const [unlockError, setUnlockError] = useState<unknown>(null);
+  // Pages loaded after the first one, and where to continue.
+  const [more, setMore] = useState<{ blobs: PublicBlob[]; cursor: string | null } | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState<unknown>(null);
+  useEffect(() => setMore(null), [res.data]);
+
+  const loadMore = async (cursor: string) => {
+    setLoadingMore(true);
+    setMoreError(null);
+    try {
+      const r = await api.public.share(token, access, { cursor, limit: PAGE });
+      setMore((m) => ({ blobs: [...(m?.blobs ?? []), ...(r.blobs ?? [])], cursor: r.next_cursor ?? null }));
+    } catch (err) {
+      setMoreError(err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const unlock = async (e: FormEvent) => {
     e.preventDefault();
@@ -76,9 +97,12 @@ export function PublicSharePage() {
     );
   }
 
-  const { share, blobs } = res.data;
+  const { share } = res.data;
+  const blobs = res.data.blobs && [...res.data.blobs, ...(more?.blobs ?? [])];
+  const cursor = more ? more.cursor : (res.data.next_cursor ?? null);
   const left = share.max_downloads != null ? Math.max(0, share.max_downloads - share.download_count) : null;
-  const total = (blobs ?? []).reduce((s, b) => s + b.size, 0);
+  const fileCount = share.file_count ?? blobs?.length ?? 0;
+  const totalBytes = share.total_bytes ?? (blobs ?? []).reduce((s, b) => s + b.size, 0);
 
   const meta = (
     <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-kumo-subtle">
@@ -154,7 +178,7 @@ export function PublicSharePage() {
           <FolderSimpleIcon size={36} weight="duotone" className="text-kumo-brand" />
           <h1 className="m-0 text-xl font-semibold break-all">{share.name}</h1>
           <span className="text-sm text-kumo-subtle">
-            {t("pub.files", { n: blobs?.length ?? 0, size: formatBytes(total) })}
+            {t("pub.files", { n: fileCount, size: formatBytes(totalBytes) })}
           </span>
           {meta}
         </div>
@@ -177,6 +201,17 @@ export function PublicSharePage() {
           </ul>
         ) : (
           <p className="m-0 px-6 py-10 text-center text-sm text-kumo-subtle">{t("pub.empty")}</p>
+        )}
+        {cursor && blobs && (
+          <div className="flex flex-col items-center gap-3 border-t border-kumo-line px-6 py-4">
+            {moreError != null && (
+              <Banner variant="error" icon={<WarningCircleIcon weight="fill" />} title={errMsg(moreError)} />
+            )}
+            <span className="text-xs text-kumo-subtle">{t("pub.shown", { n: blobs.length, total: fileCount })}</span>
+            <Button variant="secondary" loading={loadingMore} onClick={() => loadMore(cursor)}>
+              {t("pub.loadMore")}
+            </Button>
+          </div>
         )}
       </Card>
     </CenteredLayout>

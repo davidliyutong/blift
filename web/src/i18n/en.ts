@@ -325,6 +325,8 @@ export const en = {
   "pub.downloadsLeft": "{n} downloads left",
   "pub.downloadAll": "Download",
   "pub.files": "{n} files · {size}",
+  "pub.shown": "Showing {n} of {total}",
+  "pub.loadMore": "Load more",
   "pub.notFound": "This link doesn't exist",
   "pub.notFoundDesc": "It may have been deleted, or the URL is mistyped.",
   "pub.expiredDesc": "Ask the sender for a new link.",

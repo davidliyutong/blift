@@ -8,7 +8,8 @@
 // and prints the login command for this server. The script lives in a template literal: shell `${…}` is written `\${…}` and `\n` as `\\n`;
 // test/unit.test.ts runs the rendered script end to end.
 
-export const RELEASE_DOWNLOADS = "https://github.com/davidliyutong/blift/releases/download";
+export const RELEASES = "https://github.com/davidliyutong/blift/releases";
+export const RELEASE_DOWNLOADS = `${RELEASES}/download`;
 
 /** Single-quotes a value for sh. */
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;

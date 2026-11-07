@@ -62,6 +62,13 @@ type Blob struct {
 	UpdatedAt     int64    `json:"updated_at"`
 }
 
+// BlobPage is one page of a project listing. Total is only reported for the first page.
+type BlobPage struct {
+	Blobs      []Blob `json:"blobs"`
+	Total      *int   `json:"total"`
+	NextCursor string `json:"next_cursor"`
+}
+
 type Share struct {
 	ID            string  `json:"id"`
 	Token         string  `json:"token"`
@@ -99,8 +106,11 @@ type PublicShare struct {
 		DownloadCount int64  `json:"download_count"`
 		Creator       string `json:"creator"`
 		CreatedAt     int64  `json:"created_at"`
+		FileCount     *int64 `json:"file_count,omitempty"`
+		TotalBytes    *int64 `json:"total_bytes,omitempty"`
 	} `json:"share"`
-	Blobs []PublicBlob `json:"blobs,omitempty"`
+	Blobs      []PublicBlob `json:"blobs,omitempty"`
+	NextCursor string       `json:"next_cursor,omitempty"`
 }
 
 type PublicBlob struct {

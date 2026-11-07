@@ -79,8 +79,15 @@ export const api = {
     ) => http.get<{ blobs: Blob[]; total: number }>(`/api/projects/${enc(projectId)}/blobs${qs(p)}`),
     rename: (id: string, name: string) => http.patch<Blob>(`/api/blobs/${enc(id)}`, { name }),
     remove: (id: string) => http.del(`/api/blobs/${enc(id)}`),
-    bulkDelete: (projectId: string, ids: string[]) =>
-      http.post<{ deleted: number }>(`/api/projects/${enc(projectId)}/blobs/delete`, { ids }),
+    /** Deletes in requests of ≤ 100 ids, one after another (the server's per-request limit). */
+    bulkDelete: async (projectId: string, ids: string[]) => {
+      let deleted = 0;
+      for (let i = 0; i < ids.length; i += 100) {
+        const r = await http.post<{ deleted: number }>(`/api/projects/${enc(projectId)}/blobs/delete`, { ids: ids.slice(i, i + 100) });
+        deleted += r.deleted;
+      }
+      return { deleted };
+    },
     downloadHref: (id: string, inline = false) =>
       `/api/blobs/${enc(id)}/download${qs({ redirect: 1, inline: inline ? 1 : undefined })}`,
     downloadUrl: (id: string) => http.get<{ url: string; expires_at: number }>(`/api/blobs/${enc(id)}/download`),
@@ -110,8 +117,8 @@ export const api = {
   },
 
   public: {
-    share: (token: string, access?: string) =>
-      http.get<PublicShareInfo>(`/api/public/shares/${enc(token)}`, {
+    share: (token: string, access?: string, page: { cursor?: string; limit?: number } = {}) =>
+      http.get<PublicShareInfo>(`/api/public/shares/${enc(token)}${qs(page)}`, {
         headers: access ? { "X-Share-Access": access } : undefined,
       }),
     unlock: (token: string, password: string) =>

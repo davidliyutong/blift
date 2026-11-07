@@ -327,6 +327,8 @@ export const zh: Dict = {
   "pub.downloadsLeft": "剩余 {n} 次下载",
   "pub.downloadAll": "下载",
   "pub.files": "{n} 个文件 · {size}",
+  "pub.shown": "已显示 {n} / {total}",
+  "pub.loadMore": "加载更多",
   "pub.notFound": "链接不存在",
   "pub.notFoundDesc": "该链接可能已被删除，或者网址有误。",
   "pub.expiredDesc": "请联系分享者获取新的链接。",

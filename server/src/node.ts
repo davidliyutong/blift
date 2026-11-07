@@ -39,6 +39,7 @@ const env: Bindings = {
   APP_SECRET: secret("APP_SECRET", "app-secret", () => randomString(48)).value,
   PUBLIC_URL: process.env.PUBLIC_URL,
   GC_BUDGET: process.env.GC_BUDGET ?? "1000",
+  GC_ROWS: process.env.GC_ROWS ?? "20000",
 };
 
 if (!(await hasAdmin(db))) {

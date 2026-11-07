@@ -58,9 +58,12 @@ README 有英文（`README.md`）和中文（`README.zh-CN.md`）两份，改功
 - 每次 S3 调用都是子请求（免费版每次调用 50 个）：请求路径里最多 1–2 次；批量工作放到 GC 并受 `GC_BUDGET` 约束。
 - 出站并发 ≤ 6：用 `lib/http.ts` 的 `pool(items, 6, fn)`。
 - D1 单语句绑定参数 ≤ 100：`IN (...)` 用 `chunks()` + `placeholders()`；多语句一致性用 `db.batch()`。
+- 批量写入（删除、改状态）每条语句不超过 100 行：请求里只写有上限的量（如批量删除 ≤ 100 个），不确定规模的工作（删除项目、过期清理）只做标记，交给 GC 用 `… IN (SELECT … LIMIT 100)` 分批、按 `GC_ROWS` 预算慢慢清（见 `services/gc.ts`）。
 - 不要每个请求多写几次 D1：非关键写放 `c.executionCtx.waitUntil`，能合并就合并。
 - CPU：避免大循环/大 JSON；PBKDF2 已是 Workers 上限 10 万次，不要再加。
 - `aws4fetch` 的重试已设为 1（默认 10 会耗尽子请求预算）。
+- 列表不要整表 `COUNT(*)` 或深 `OFFSET`：按排序键建 `(project_id, 键, id)` 部分索引，用 keyset 游标翻页（见 `listBlobs`）；计数优先用维护好的计数列。
+  D1 按读取行数计费，绑定参数时 SQLite 不知道 `IN` / 前缀条件的选择性，可能为省一次排序去扫整个排序索引，必要时用 `INDEXED BY` 固定索引，并用 `EXPLAIN QUERY PLAN` 在有数据的库上确认。
 
 ## 前端约定（`web/src`）
 

@@ -2,38 +2,42 @@ import { Hono } from "hono";
 import { all, chunks, one, placeholders, run } from "../db";
 import type { AppEnv } from "../env";
 import { badRequest, conflict } from "../lib/errors";
-import { blobName, body, int, likeArg } from "../lib/http";
-import { BLOB_SELECT, deleteBlobs, loadBlob, loadProject, toBlob, type BlobRow } from "../services/projects";
+import { blobName, body, int } from "../lib/http";
+import { BLOB_SORTS, deleteBlobs, listBlobs, loadBlob, loadProject, toBlob, type BlobSort } from "../services/projects";
 import { addStats } from "../services/stats";
 import { storageFor } from "../services/storage";
 
 export const DOWNLOAD_TTL = 3600;
-
-const SORT: Record<string, string> = { name: "b.name COLLATE NOCASE", size: "b.size", created_at: "b.created_at" };
 
 // Mounted at /api/projects/:pid/blobs
 export const projectBlobs = new Hono<AppEnv>();
 
 projectBlobs.get("/", async (c) => {
   const p = await loadProject(c, c.req.param("pid")!, "viewer");
-  const q = (c.req.query("q") ?? "").trim();
-  const sort = SORT[c.req.query("sort") ?? "created_at"] ?? SORT.created_at;
-  const order = c.req.query("order") === "asc" ? "ASC" : "DESC";
-  const limit = int(c.req.query("limit") ?? 100, "limit", 1, 1000);
+  const sort = c.req.query("sort") ?? "created_at";
+  const names = c.req.queries("name") ?? [];
+  if (names.length > 50) throw badRequest("at most 50 names per request");
+  const cursor = c.req.query("cursor") || undefined;
   const offset = int(c.req.query("offset") ?? 0, "offset", 0, 1e9);
-  const where = `b.project_id = ? AND b.status = 'active'${q ? " AND b.name LIKE ? ESCAPE '\\'" : ""}`;
-  const args = q ? [p.id, likeArg(q)] : [p.id];
-  const [rows, total] = await Promise.all([
-    all<BlobRow>(c.env.DB, `${BLOB_SELECT} WHERE ${where} ORDER BY ${sort} ${order}, b.id LIMIT ? OFFSET ?`, ...args, limit, offset),
-    one<{ n: number }>(c.env.DB, `SELECT COUNT(*) AS n FROM blobs b WHERE ${where}`, ...args),
-  ]);
-  return c.json({ blobs: rows.map(toBlob), total: total?.n ?? 0 });
+  if (cursor && offset) throw badRequest("use either cursor or offset");
+  const page = await listBlobs(c.env.DB, p, {
+    sort: (BLOB_SORTS as readonly string[]).includes(sort) ? (sort as BlobSort) : "created_at",
+    order: c.req.query("order") === "asc" ? "asc" : "desc",
+    limit: int(c.req.query("limit") ?? 100, "limit", 1, 1000),
+    q: (c.req.query("q") ?? "").trim() || undefined,
+    prefix: c.req.query("prefix") || undefined,
+    names,
+    cursor,
+    offset,
+  });
+  return c.json({ blobs: page.rows.map(toBlob), total: page.total, next_cursor: page.next_cursor });
 });
 
 projectBlobs.post("/delete", async (c) => {
   const p = await loadProject(c, c.req.param("pid")!, "editor");
   const ids = (await body<{ ids?: unknown }>(c)).ids;
-  if (!Array.isArray(ids) || ids.length === 0 || ids.length > 500) throw badRequest("ids must be an array of 1-500 ids");
+  // ≤ 100 per request keeps each delete a short write; clients send larger sets in batches.
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > 100) throw badRequest("ids must be an array of 1-100 ids");
   const found: { id: string; size: number }[] = [];
   for (const part of chunks(ids.map(String))) {
     found.push(

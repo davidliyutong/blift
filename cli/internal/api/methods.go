@@ -107,6 +107,15 @@ func (c *Client) RemoveMember(ctx context.Context, projectID, userID string) err
 	return c.do(ctx, http.MethodDelete, "/api/projects/"+esc(projectID)+"/members/"+esc(userID), nil, nil)
 }
 
+// SearchUsers finds active users by username, email or display name (≤ 10).
+func (c *Client) SearchUsers(ctx context.Context, q string) ([]UserRef, error) {
+	r := struct {
+		Users []UserRef `json:"users"`
+	}{Users: []UserRef{}}
+	err := c.do(ctx, http.MethodGet, "/api/users/search?q="+url.QueryEscape(q), nil, &r)
+	return r.Users, err
+}
+
 func (c *Client) Storages(ctx context.Context) ([]Storage, error) {
 	var r struct {
 		Storages []Storage `json:"storages"`
@@ -117,30 +126,94 @@ func (c *Client) Storages(ctx context.Context) ([]Storage, error) {
 
 // ---- blobs ----
 
-// Blobs lists every blob of a project, paging with limit/offset until done.
-// sort is name|size|created_at, order asc|desc (empty = server default).
-func (c *Client) Blobs(ctx context.Context, projectID, sort, order string) ([]Blob, error) {
-	all := []Blob{}
-	for {
-		q := url.Values{"limit": {"100"}, "offset": {strconv.Itoa(len(all))}}
-		if sort != "" {
-			q.Set("sort", sort)
-		}
-		if order != "" {
-			q.Set("order", order)
-		}
-		var page struct {
-			Blobs []Blob `json:"blobs"`
-			Total int    `json:"total"`
-		}
-		if err := c.do(ctx, http.MethodGet, "/api/projects/"+esc(projectID)+"/blobs?"+q.Encode(), nil, &page); err != nil {
-			return nil, err
-		}
-		all = append(all, page.Blobs...)
-		if len(page.Blobs) == 0 || len(all) >= page.Total {
-			return all, nil
+// BlobQuery selects blobs of a project; zero values mean the server defaults.
+type BlobQuery struct {
+	Q      string   // name contains
+	Prefix string   // name starts with (case-insensitive)
+	Names  []string // exact names, ≤ 50
+	Sort   string   // name | size | created_at
+	Order  string   // asc | desc
+	Limit  int      // page size, ≤ 1000
+	Cursor string   // next_cursor of the previous page
+	offset int      // servers before v0.1.2 page by offset only
+}
+
+// BlobsPage fetches one page.
+func (c *Client) BlobsPage(ctx context.Context, projectID string, q BlobQuery) (*BlobPage, error) {
+	v := url.Values{}
+	for k, s := range map[string]string{"q": q.Q, "prefix": q.Prefix, "sort": q.Sort, "order": q.Order, "cursor": q.Cursor} {
+		if s != "" {
+			v.Set(k, s)
 		}
 	}
+	for _, n := range q.Names {
+		v.Add("name", n)
+	}
+	if q.Limit > 0 {
+		v.Set("limit", strconv.Itoa(q.Limit))
+	}
+	if q.offset > 0 {
+		v.Set("offset", strconv.Itoa(q.offset))
+	}
+	p := BlobPage{Blobs: []Blob{}}
+	return &p, c.do(ctx, http.MethodGet, "/api/projects/"+esc(projectID)+"/blobs?"+v.Encode(), nil, &p)
+}
+
+// ListBlobs pages through the matching blobs until max of them are collected (max ≤ 0: all).
+// total is the number of matching blobs reported by the server (-1 if unknown).
+func (c *Client) ListBlobs(ctx context.Context, projectID string, q BlobQuery, max int) (blobs []Blob, total int, err error) {
+	blobs, total = []Blob{}, -1
+	for {
+		q.Limit = 1000
+		if max > 0 {
+			q.Limit = min(1000, max-len(blobs))
+		}
+		page, err := c.BlobsPage(ctx, projectID, q)
+		if err != nil {
+			return nil, total, err
+		}
+		if page.Total != nil && total < 0 {
+			total = *page.Total
+		}
+		blobs = append(blobs, page.Blobs...)
+		switch {
+		case max > 0 && len(blobs) >= max:
+			return blobs[:max], total, nil
+		case len(page.Blobs) == 0:
+			return blobs, total, nil
+		case page.NextCursor != "":
+			q.Cursor = page.NextCursor
+		case page.Total != nil && len(blobs) < *page.Total && q.Cursor == "":
+			q.offset = len(blobs) // an older server: offset paging
+		default:
+			return blobs, total, nil
+		}
+	}
+}
+
+// Blobs lists every blob of a project. sort is name|size|created_at, order asc|desc.
+func (c *Client) Blobs(ctx context.Context, projectID, sort, order string) ([]Blob, error) {
+	blobs, _, err := c.ListBlobs(ctx, projectID, BlobQuery{Sort: sort, Order: order}, 0)
+	return blobs, err
+}
+
+// BlobsNamed returns the active blobs with exactly these names; missing names are skipped.
+func (c *Client) BlobsNamed(ctx context.Context, projectID string, names []string) ([]Blob, error) {
+	out := []Blob{}
+	for start := 0; start < len(names); start += 50 {
+		chunk := names[start:min(start+50, len(names))]
+		page, err := c.BlobsPage(ctx, projectID, BlobQuery{Names: chunk, Limit: len(chunk)})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page.Blobs...)
+	}
+	return out, nil
+}
+
+func (c *Client) Blob(ctx context.Context, id string) (*Blob, error) {
+	var b Blob
+	return &b, c.do(ctx, http.MethodGet, "/api/blobs/"+esc(id), nil, &b)
 }
 
 func (c *Client) RenameBlob(ctx context.Context, id, name string) (*Blob, error) {
@@ -148,15 +221,16 @@ func (c *Client) RenameBlob(ctx context.Context, id, name string) (*Blob, error)
 	return &b, c.do(ctx, http.MethodPatch, "/api/blobs/"+esc(id), map[string]string{"name": name}, &b)
 }
 
-// DeleteBlobs bulk-deletes blobs in batches of 500 and returns the number deleted.
+// DeleteBlobs bulk-deletes blobs, one request of ≤ 100 ids at a time (the server's limit, which
+// keeps each delete a short database write), and returns the number deleted.
 func (c *Client) DeleteBlobs(ctx context.Context, projectID string, ids []string) (int, error) {
 	total := 0
-	for start := 0; start < len(ids); start += 500 {
+	for start := 0; start < len(ids); start += 100 {
 		var r struct {
 			Deleted int `json:"deleted"`
 		}
 		err := c.do(ctx, http.MethodPost, "/api/projects/"+esc(projectID)+"/blobs/delete",
-			map[string][]string{"ids": ids[start:min(start+500, len(ids))]}, &r)
+			map[string][]string{"ids": ids[start:min(start+100, len(ids))]}, &r)
 		if err != nil {
 			return total, err
 		}
@@ -231,9 +305,14 @@ func accessHeader(access string) map[string]string {
 	return map[string]string{"X-Share-Access": access}
 }
 
-func (c *Client) PublicShare(ctx context.Context, token, access string) (*PublicShare, error) {
+// PublicShare fetches a share and the first page of its files (cursor: a later page).
+func (c *Client) PublicShare(ctx context.Context, token, access, cursor string) (*PublicShare, error) {
+	path := "/api/public/shares/" + esc(token)
+	if cursor != "" {
+		path += "?cursor=" + url.QueryEscape(cursor)
+	}
 	var s PublicShare
-	return &s, c.doH(ctx, http.MethodGet, "/api/public/shares/"+esc(token), accessHeader(access), nil, &s)
+	return &s, c.doH(ctx, http.MethodGet, path, accessHeader(access), nil, &s)
 }
 
 func (c *Client) UnlockShare(ctx context.Context, token, password string) (string, error) {

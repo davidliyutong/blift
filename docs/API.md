@@ -145,6 +145,9 @@ version (verified against `SHA256SUMS`) and prints `blift login --server <public
 It downloads through the relay below and falls back to GitHub Releases directly.
 Client-side overrides: `BLIFT_VERSION`, `BLIFT_INSTALL_DIR`, `BLIFT_DOWNLOAD_URL` (only this mirror).
 
+`GET /api/cli/latest` (no auth) → `{ "version": "0.1.1" }`, the latest published release (from
+GitHub, kept for an hour; `502 upstream_error` if GitHub cannot be reached). `blift update` uses it.
+
 `GET /api/cli/download/v<version>/<file>` (no auth) relays a file of the GitHub release `v<version>`:
 `blift_<version>_<os>_<arch>.tar.gz` or `SHA256SUMS`; anything else → `404 not_found`. GitHub
 unreachable → `502 upstream_error`. Responses are `immutable`; Workers keep them in the edge cache.
@@ -196,15 +199,27 @@ Roles: `viewer` = list + download; `editor` = + upload, rename, delete blobs, cr
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `/api/projects/:id/blobs?q=&sort=name\|size\|created_at&order=asc\|desc&limit=100&offset=0` | – | `{blobs: Blob[], total}` |
+| GET | `/api/projects/:id/blobs?q=&prefix=&name=&sort=name\|size\|created_at&order=asc\|desc&limit=100&cursor=` | – | `{blobs: Blob[], total?, next_cursor}` (see below) |
 | GET | `/api/blobs/:id` | – | `Blob` |
 | PATCH | `/api/blobs/:id` | `{name}` | `Blob` (editor) |
 | DELETE | `/api/blobs/:id` | – | 204 (editor) |
-| POST | `/api/projects/:id/blobs/delete` | `{ids: string[]}` (≤ 500) | `{deleted: n}` |
+| POST | `/api/projects/:id/blobs/delete` | `{ids: string[]}` (≤ 100; send more in several requests) | `{deleted: n}` |
 | GET | `/api/blobs/:id/download?redirect=1&inline=1` | – | `{url, expires_at}` or `302` to `url` when `redirect=1` |
 
 `url` is a presigned S3 GET (valid 1 h) that sets `Content-Disposition` to the blob name
 (`inline` when `inline=1`). Clients download **directly from S3**.
+
+**Listing** (`GET /api/projects/:id/blobs`) is cheap at any project size: every sort is served in
+index order and pages continue with a cursor.
+- `limit` 1–1000 (default 100). `sort` defaults to `created_at`, `order` to `desc`; names sort
+  case-insensitively.
+- `next_cursor` is set when more rows follow; pass it back as `cursor` with the same `sort`
+  and `order` (another sort → `400 bad_request`). `offset` still works for numbered pages
+  (not together with `cursor`) but costs more the deeper it goes.
+- `total`, the number of matching blobs, is only returned when `cursor` is absent.
+- Filters: `q` (name contains, case-insensitive), `prefix` (name starts with,
+  case-insensitive; used for shell completion), `name` (exact name, repeatable, ≤ 50; the
+  CLI resolves file arguments with it).
 
 ## Uploads (direct to S3 via presigned URLs)
 
@@ -244,17 +259,21 @@ Presigned URLs are valid for 6 hours.
 
 | Method | Path | Response |
 | --- | --- | --- |
-| GET | `/api/public/shares/:token` | see below |
+| GET | `/api/public/shares/:token?limit=5000&cursor=` | see below |
 | POST | `/api/public/shares/:token/unlock` body `{password}` | `{access_token}` + cookie |
 | GET | `/api/public/shares/:token/blobs/:blob_id/download?redirect=1` | `{url, expires_at}` or 302 |
 
 ```json
 { "share": { "token": "…", "kind": "blob" | "project", "name": "file or project name",
              "has_password": true, "locked": false, "expires_at": null,
-             "max_downloads": null, "download_count": 3, "creator": "Alice", "created_at": 0 },
-  "blobs": [ { "id", "name", "size", "content_type", "created_at" } ] }
+             "max_downloads": null, "download_count": 3, "creator": "Alice", "created_at": 0,
+             "file_count": 12000, "total_bytes": 123456789 },
+  "blobs": [ { "id", "name", "size", "content_type", "created_at" } ],
+  "next_cursor": "…" }
 ```
-`blobs` is omitted while `locked`. For password-protected shares pass the access token with
+`blobs` and `next_cursor` are omitted while `locked`. A project share lists its files by name,
+`limit` (1–5000, default 5000) at a time; `next_cursor` (else `null`) fetches the next page
+as `?cursor=`. `file_count` / `total_bytes` describe the whole share. For password-protected shares pass the access token with
 header `X-Share-Access: <token>` or query `?access_token=` (the unlock call also sets an
 HttpOnly cookie for browsers). Errors: `not_found`, `share_expired`, `share_exhausted`, `invalid_password`.
 

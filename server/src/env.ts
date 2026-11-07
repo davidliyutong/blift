@@ -11,6 +11,8 @@ export type Bindings = {
   PUBLIC_URL?: string;
   /** Max S3 requests per GC run (Workers free plan: 50 subrequests per invocation). */
   GC_BUDGET?: string;
+  /** Max database rows GC writes per run (default 5000), in statements of ≤ 100 rows. */
+  GC_ROWS?: string;
 };
 
 export type Role = "admin" | "user";

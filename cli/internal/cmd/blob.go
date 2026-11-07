@@ -16,28 +16,46 @@ import (
 	"github.com/davidliyutong/blift/cli/internal/ui"
 )
 
+// lsDefaultLimit keeps `blift ls` on a project with many files short; --limit / --all widen it.
+const lsDefaultLimit = 100
+
 func lsCmd() *cobra.Command {
-	var sortBy string
+	var sortBy, query string
+	var limit int
+	var all bool
 	c := &cobra.Command{
-		Use:     "ls <project>",
-		Aliases: []string{"list"},
-		Short:   i18n.T("cmd.ls"),
-		Args:    cobra.ExactArgs(1),
+		Use:               "ls <project>",
+		Aliases:           []string{"list"},
+		Short:             i18n.T("cmd.ls"),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeArgs(completeProjects),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sorts := map[string][2]string{"name": {"name", "asc"}, "size": {"size", "desc"}, "time": {"created_at", "desc"}}
 			s, ok := sorts[sortBy]
 			if !ok {
 				return errors.New(i18n.T("bad_sort", sortBy))
 			}
+			if limit < 1 {
+				return errors.New(i18n.T("bad_limit"))
+			}
+			if all {
+				limit = 0
+			}
 			c, p, err := projectWithClient(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
-			blobs, err := c.Blobs(cmd.Context(), p.ID, s[0], s[1])
-			if err != nil || jsonOut {
-				return orJSON(err, blobs)
+			blobs, total, err := c.ListBlobs(cmd.Context(), p.ID, api.BlobQuery{Q: query, Sort: s[0], Order: s[1]}, limit)
+			if err != nil {
+				return err
 			}
-			var total int64
+			if jsonOut {
+				if total > len(blobs) {
+					info("ls.more", len(blobs), total)
+				}
+				return printJSON(blobs)
+			}
+			var size int64
 			rows := make([][]string, 0, len(blobs))
 			for _, b := range blobs {
 				uploader := "-"
@@ -45,14 +63,22 @@ func lsCmd() *cobra.Command {
 					uploader = b.Uploader.Username
 				}
 				rows = append(rows, []string{b.Name, ui.Size(b.Size), ui.Time(b.CreatedAt), uploader, b.ID})
-				total += b.Size
+				size += b.Size
 			}
 			table([]string{"col.name", "col.size", "col.created", "col.uploader", "col.id"}, rows)
-			info("ls.summary", len(blobs), ui.Size(total))
+			if total > len(blobs) {
+				info("ls.more", len(blobs), total)
+			} else {
+				info("ls.summary", len(blobs), ui.Size(size))
+			}
 			return nil
 		},
 	}
 	c.Flags().StringVar(&sortBy, "sort", "name", i18n.T("flag.sort"))
+	c.Flags().StringVar(&query, "query", "", i18n.T("flag.query"))
+	c.Flags().IntVarP(&limit, "limit", "n", lsDefaultLimit, i18n.T("flag.limit"))
+	c.Flags().BoolVarP(&all, "all", "a", false, i18n.T("flag.ls_all"))
+	_ = c.RegisterFlagCompletionFunc("sort", fixed("name", "size", "time"))
 	return c
 }
 
@@ -61,11 +87,12 @@ func uploadCmd() *cobra.Command {
 	var overwrite bool
 	var jobs int
 	c := &cobra.Command{
-		Use:     "upload <project> <file>...",
-		Aliases: []string{"up", "push"},
-		Short:   i18n.T("cmd.upload"),
-		Long:    i18n.T("cmd.upload.long"),
-		Args:    cobra.MinimumNArgs(2),
+		Use:               "upload <project> <file>...",
+		Aliases:           []string{"up", "push"},
+		Short:             i18n.T("cmd.upload"),
+		Long:              i18n.T("cmd.upload.long"),
+		Args:              cobra.MinimumNArgs(2),
+		ValidArgsFunction: completeArgs(completeProjects, completeLocalFiles),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := expandFiles(args[1:])
 			if err != nil {
@@ -165,10 +192,11 @@ func downloadCmd() *cobra.Command {
 	var all bool
 	var jobs int
 	c := &cobra.Command{
-		Use:     "download <project> [blob...]",
-		Aliases: []string{"dl", "pull"},
-		Short:   i18n.T("cmd.download"),
-		Args:    cobra.MinimumNArgs(1),
+		Use:               "download <project> [blob...]",
+		Aliases:           []string{"dl", "pull"},
+		Short:             i18n.T("cmd.download"),
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeArgs(completeProjects, completeBlobs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all == (len(args) > 1) {
 				return errors.New(i18n.T("download.which"))
@@ -274,10 +302,11 @@ func destPath(out, name string, dir bool) (string, error) {
 func rmCmd() *cobra.Command {
 	var yes bool
 	c := &cobra.Command{
-		Use:     "rm <project> <blob>...",
-		Aliases: []string{"delete"},
-		Short:   i18n.T("cmd.rm"),
-		Args:    cobra.MinimumNArgs(2),
+		Use:               "rm <project> <blob>...",
+		Aliases:           []string{"delete"},
+		Short:             i18n.T("cmd.rm"),
+		Args:              cobra.MinimumNArgs(2),
+		ValidArgsFunction: completeArgs(completeProjects, completeBlobs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			c, p, err := projectWithClient(ctx, args[0])
@@ -309,10 +338,11 @@ func rmCmd() *cobra.Command {
 
 func mvCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "mv <project> <blob> <new-name>",
-		Aliases: []string{"rename"},
-		Short:   i18n.T("cmd.mv"),
-		Args:    cobra.ExactArgs(3),
+		Use:               "mv <project> <blob> <new-name>",
+		Aliases:           []string{"rename"},
+		Short:             i18n.T("cmd.mv"),
+		Args:              cobra.ExactArgs(3),
+		ValidArgsFunction: completeArgs(completeProjects, completeBlobs, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			c, p, err := projectWithClient(ctx, args[0])
@@ -335,9 +365,10 @@ func mvCmd() *cobra.Command {
 
 func urlCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "url <project> <blob>",
-		Short: i18n.T("cmd.url"),
-		Args:  cobra.ExactArgs(2),
+		Use:               "url <project> <blob>",
+		Short:             i18n.T("cmd.url"),
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: completeArgs(completeProjects, completeBlobs, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			c, p, err := projectWithClient(ctx, args[0])
