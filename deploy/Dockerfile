@@ -4,7 +4,7 @@
 
 # The build output is plain JavaScript, so it is built once on the build machine's platform
 # and only copied into each target platform's runtime image.
-FROM --platform=$BUILDPLATFORM node:24-alpine AS build
+FROM --platform=$BUILDPLATFORM node:25-alpine AS build
 WORKDIR /src
 RUN npm install -g pnpm@10.18.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -15,7 +15,7 @@ COPY server server
 COPY web web
 RUN pnpm --filter web build && pnpm --filter server build
 
-FROM node:24-alpine
+FROM node:25-alpine
 LABEL org.opencontainers.image.source="https://github.com/davidliyutong/blift" \
       org.opencontainers.image.description="Lightweight file sharing on S3-compatible object storage" \
       org.opencontainers.image.licenses="MIT"
