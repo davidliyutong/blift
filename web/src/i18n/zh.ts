@@ -301,7 +301,7 @@ export const zh: Dict = {
   "account.revoke": "注销",
   "account.revoked": "会话已注销",
   "account.cli": "命令行客户端",
-  "account.cliDesc": "安装 blift CLI 后通过浏览器授权登录，体验与 gh 一致。",
+  "account.cliDesc": "安装 blift CLI（Linux / macOS）后通过浏览器授权登录。",
   "account.usage": "存储用量",
 
   // CLI authorize

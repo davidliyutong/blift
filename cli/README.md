@@ -3,6 +3,15 @@
 blift 的命令行客户端（Go，单一静态二进制，支持 Linux/macOS × amd64/arm64）。
 文件不经过服务器：上传、下载都通过服务器签发的 S3 预签名 URL 直连对象存储。
 
+## 安装
+
+```sh
+curl -fsSL https://<你的 blift 服务器>/install.sh | sh
+```
+
+安装与该服务器版本一致的 CLI（来自 GitHub Release，校验 SHA-256）。可选环境变量：
+`BLIFT_INSTALL_DIR`（安装目录）、`BLIFT_VERSION`（指定版本）、`BLIFT_DOWNLOAD_URL`（Release 下载镜像）。
+
 ## 构建与测试
 
 ```sh
@@ -23,7 +32,7 @@ go test ./... && go vet ./...
 
 | 命令 | 说明 |
 | --- | --- |
-| `blift login [--server URL] [--no-browser] [--token T]` | 浏览器设备码授权登录（类似 `gh auth login`），或直接使用令牌 |
+| `blift login [--server URL] [--no-browser] [--token T]` | 浏览器设备码授权登录，或直接使用令牌 |
 | `blift logout` / `whoami` / `version` | 退出、查看当前用户、版本 |
 | `blift project ls\|create\|info\|rm\|rename\|members\|add-member\|rm-member` | 项目管理（别名 `projects`、`p`） |
 | `blift ls <项目> [--sort name\|size\|time]` | 列出文件 |

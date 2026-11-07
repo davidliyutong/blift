@@ -16,6 +16,18 @@ import { publicShares, shares } from "./routes/shares";
 import { projectUploads, uploads } from "./routes/uploads";
 import { flushStats } from "./services/stats";
 
+/** Paths outside /api that the API answers; wrangler.toml `run_worker_first` lists them too. */
+const ALIASES: Record<string, string> = { "/install.sh": "/api/cli/install.sh" };
+
+/** Rewrites a top-level alias such as /install.sh onto its /api route. */
+export function resolveAlias(req: Request): Request {
+  const url = new URL(req.url);
+  const to = ALIASES[url.pathname];
+  if (!to) return req;
+  url.pathname = to;
+  return new Request(url, req);
+}
+
 export function createApp() {
   const app = new Hono<AppEnv>().basePath("/api");
 

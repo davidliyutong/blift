@@ -136,7 +136,15 @@ OIDC: users are auto-registered on first login (matched by `sub`). ID tokens sig
 **HS256** (key = client secret) and **RS256/ES256** (JWKS) are accepted. If the admin sets
 `admin_group`, members of that group (from the `groups` claim) become admins.
 
-## CLI login (device flow, like `gh auth login`)
+## CLI installer
+
+`GET /api/cli/install.sh`, also served at `/install.sh` (no auth) → `text/plain` POSIX sh script for
+`curl -fsSL https://host/install.sh | sh`. It installs the CLI release matching the server's
+version from GitHub Releases (verified against `SHA256SUMS`) and prints
+`blift login --server <public origin>`. Client-side overrides: `BLIFT_VERSION`,
+`BLIFT_INSTALL_DIR`, `BLIFT_DOWNLOAD_URL`.
+
+## CLI login (device flow)
 
 1. `POST /api/cli/login` (no auth) body `{ "client_name": "blift-cli on my-laptop" }` →
    ```json

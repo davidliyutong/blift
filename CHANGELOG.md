@@ -6,6 +6,12 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- CLI installer served by every blift server: `curl -fsSL https://<server>/install.sh | sh`
+  installs the CLI release matching the server version (SHA-256 verified) and prints the
+  `blift login` command for that server. Account settings show the command.
+
 ## [0.1.0] - 2026-11-07
 
 First release.

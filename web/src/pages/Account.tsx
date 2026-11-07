@@ -314,7 +314,7 @@ function CliSection() {
     >
       <CodeBlock
         lang="bash"
-        code={`blift login --server ${origin}\nblift project ls\nblift upload <project> ./file.zip\nblift share create <project> file.zip --expires 7d`}
+        code={`curl -fsSL ${origin}/install.sh | sh\nblift login --server ${origin}\nblift project ls\nblift upload <project> ./file.zip\nblift share create <project> file.zip --expires 7d`}
       />
     </Section>
   );

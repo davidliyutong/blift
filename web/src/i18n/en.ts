@@ -299,7 +299,7 @@ export const en = {
   "account.revoke": "Revoke",
   "account.revoked": "Session revoked",
   "account.cli": "Command-line client",
-  "account.cliDesc": "Install the blift CLI and sign in through your browser — just like gh.",
+  "account.cliDesc": "Install the blift CLI (Linux and macOS) and sign in through your browser.",
   "account.usage": "Storage usage",
 
   // CLI authorize

@@ -1,3 +1,8 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { all } from "../src/db";
 import { migrate } from "../src/db/migrations";
@@ -5,6 +10,7 @@ import { NodeD1 } from "../src/db/node-sqlite";
 import { decrypt, encrypt, hashPassword, verifyPassword } from "../src/lib/crypto";
 import { blobName, projectName } from "../src/lib/http";
 import { newId, newShareToken, newToken, newUserCode } from "../src/lib/ids";
+import { installScript } from "../src/lib/install";
 import { contentDisposition, S3 } from "../src/lib/s3";
 import { base32Decode, base32Encode, totpCode, verifyTotp } from "../src/lib/totp";
 import { partSizeFor } from "../src/routes/uploads";
@@ -104,5 +110,49 @@ describe("migrations", () => {
       expect.arrayContaining(["users", "sessions", "projects", "blobs", "shares", "storages", "stats_daily", "_migrations"]),
     );
     db.close();
+  });
+});
+
+describe("install.sh", () => {
+  const server = "https://files.example.com/o'neil"; // the quote must survive sh quoting
+  const script = installScript(server, "9.8.7");
+
+  // Runs the script the way `curl … | sh` does, against a file:// "mirror" with fake releases.
+  it.each(["sh", "bash"])("installs and verifies the checksum (%s)", (shell) => {
+    const root = mkdtempSync(join(tmpdir(), "blift-install-"));
+    try {
+      const rel = join(root, "mirror", "v9.8.7");
+      mkdirSync(rel, { recursive: true });
+      const sums: string[] = [];
+      for (const os of ["linux", "darwin"])
+        for (const arch of ["amd64", "arm64"]) {
+          const name = `blift_9.8.7_${os}_${arch}`;
+          mkdirSync(join(root, "pkg", name), { recursive: true });
+          writeFileSync(join(root, "pkg", name, "blift"), "#!/bin/sh\necho 'blift v9.8.7 (test)'\n", { mode: 0o755 });
+          execFileSync("tar", ["-C", join(root, "pkg"), "-czf", join(rel, `${name}.tar.gz`), name]);
+          sums.push(`${createHash("sha256").update(readFileSync(join(rel, `${name}.tar.gz`))).digest("hex")}  ${name}.tar.gz`);
+        }
+      writeFileSync(join(rel, "SHA256SUMS"), `${sums.join("\n")}\n`);
+      const env = {
+        PATH: process.env.PATH,
+        HOME: root,
+        LANG: "zh_CN.UTF-8", // bash 3.2 would read "$x）" as one name: messages must use ${x}
+        BLIFT_DOWNLOAD_URL: `file://${join(root, "mirror")}`,
+        BLIFT_INSTALL_DIR: join(root, "bin"),
+      };
+      const ok = spawnSync(shell, [], { input: script, env });
+      expect(ok.status, ok.stderr.toString()).toBe(0);
+      const out = ok.stdout.toString();
+      expect(out).toContain("blift v9.8.7 (test)");
+      expect(out).toContain("不在 PATH 中");
+      expect(out).toContain(`blift login --server ${server}`);
+
+      writeFileSync(join(rel, "SHA256SUMS"), sums.map((l) => "0".repeat(64) + l.slice(64)).join("\n"));
+      const bad = spawnSync(shell, [], { input: script, env: { ...env, LANG: "C" } });
+      expect(bad.status).not.toBe(0);
+      expect(bad.stderr.toString()).toContain("SHA-256 mismatch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

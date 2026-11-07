@@ -10,7 +10,7 @@ English | [简体中文](README.zh-CN.md)
 S3-compatible object storage (Cloudflare R2, Backblaze B2, AWS S3, RustFS, MinIO…). It runs
 natively on **Cloudflare Workers** (D1 + Workers Assets + Cron) or self-hosted with **Docker**
 (Node + SQLite), and comes with a web UI in Cloudflare's own design language and a single-binary
-**Go CLI** that signs in through the browser like `gh`.
+**Go CLI** that signs in through the browser.
 
 File bytes never pass through the server: browsers and the CLI upload and download straight
 from the bucket with presigned URLs, while blift handles accounts, permissions, sharing, quotas
@@ -173,8 +173,20 @@ linked instead. Users who enable blift's TOTP enter their code after the SSO rou
 
 ## CLI
 
-Download the archive for your platform from the
-[latest release](https://github.com/davidliyutong/blift/releases/latest):
+Every blift server hosts an installer for the CLI release that matches its version
+(Linux and macOS, amd64 and arm64; `| bash` works as well):
+
+```sh
+curl -fsSL https://files.example.com/install.sh | sh
+```
+
+It downloads the archive from GitHub Releases, checks it against `SHA256SUMS` and installs to
+`/usr/local/bin` (with sudo if needed) or `~/.local/bin`. `BLIFT_INSTALL_DIR`, `BLIFT_VERSION`
+and `BLIFT_DOWNLOAD_URL` (a mirror of the release downloads) change those defaults. Account
+settings in the web UI show the command for your server.
+
+Or download the archive for your platform from the
+[latest release](https://github.com/davidliyutong/blift/releases/latest) yourself:
 
 ```sh
 VER=0.1.0 OS=$(uname -s | tr A-Z a-z) ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
@@ -185,7 +197,7 @@ sudo install "blift_${VER}_${OS}_${ARCH}/blift" /usr/local/bin/
 Or build it: `make cli` (this platform) or `make cli-all` (Linux and macOS, amd64 and arm64).
 
 ```console
-$ blift login --server https://files.example.com     # opens the browser, like gh auth login
+$ blift login --server https://files.example.com     # approve the sign-in in your browser
 $ blift project ls
 NAME            OWNER  ROLE   FILES  SIZE       UPDATED           ID
 datasets        alice  owner  2      12.0 MiB   2026-11-07 20:39  2rrrsvmr54gnc3ua

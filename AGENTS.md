@@ -40,7 +40,7 @@ README 有英文（`README.md`）和中文（`README.zh-CN.md`）两份，改功
 
 ## 服务端架构（`server/src`）
 
-- `app.ts` 组装 Hono 应用（basePath `/api`）；`worker.ts` 是 Workers 入口（fetch + scheduled GC）；`node.ts` 是 Docker 入口（node:sqlite、静态文件、定时 GC、自动生成 secret）。
+- `app.ts` 组装 Hono 应用（basePath `/api`）；`/api` 之外由 API 处理的路径（目前只有 `/install.sh`）登记在 `ALIASES`，并同步加到 `wrangler.toml` 的 `run_worker_first`；`worker.ts` 是 Workers 入口（fetch + scheduled GC）；`node.ts` 是 Docker 入口（node:sqlite、静态文件、定时 GC、自动生成 secret）。
 - `db/index.ts` 定义的 `DB` 接口是 **D1 API 的子集**；`db/node-sqlite.ts` 在 Node 上实现它。只用 `one/all/run/stmt` 辅助函数和 `db.batch()`，不要引入 ORM。
 - `db/migrations.ts`：迁移**只追加、不修改**；启动/首个请求时自动执行。刻意不声明外键（D1 强制外键，而删除是异步的），引用清理在代码里显式做。
 - 状态机：

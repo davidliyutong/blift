@@ -2,10 +2,10 @@
 // from WEB_DIR, GC on a timer instead of a cron trigger.
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { createApp } from "./app";
+import { createApp, resolveAlias } from "./app";
 import { migrate } from "./db/migrations";
 import { NodeD1 } from "./db/node-sqlite";
 import type { Bindings } from "./env";
@@ -58,7 +58,9 @@ const ctx = {
 const api = createApp();
 
 const root = new Hono();
-root.all("/api/*", (c) => api.fetch(c.req.raw, env, ctx as never));
+const toApi = (c: Context) => api.fetch(resolveAlias(c.req.raw), env, ctx as never);
+root.all("/api/*", toApi);
+root.get("/install.sh", toApi);
 root.use(
   "/assets/*",
   serveStatic({ root: WEB_DIR, onFound: (_p, c) => c.header("cache-control", "public, max-age=31536000, immutable") }),

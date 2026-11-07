@@ -8,8 +8,8 @@
 
 **blift** 是面向团队的轻量文件共享 / 传输系统，以任意 S3 兼容对象存储（Cloudflare R2、Backblaze B2、
 AWS S3、RustFS、MinIO……）为后端。它原生运行在 **Cloudflare Workers**（D1 + Workers Assets + Cron），
-也可以用 **Docker** 自托管（Node + SQLite）；自带采用 Cloudflare 控制台设计语言的 Web 界面，以及像 `gh`
-一样在浏览器里授权登录的单文件 **Go CLI**。
+也可以用 **Docker** 自托管（Node + SQLite）；自带采用 Cloudflare 控制台设计语言的 Web 界面，以及在浏览器里授权登录的
+单文件 **Go CLI**。
 
 文件字节从不经过服务端：浏览器和 CLI 通过预签名 URL 直接与存储桶上传下载，blift 只负责账号、权限、
 分享、配额与记账。
@@ -152,7 +152,18 @@ b2 bucket update <bucket> allPrivate --cors-rules '[{"corsRuleName":"blift","all
 
 ## CLI
 
-从[最新 Release](https://github.com/davidliyutong/blift/releases/latest) 下载对应平台的压缩包：
+每个 blift 服务端都自带 CLI 安装脚本，安装与服务端版本一致的 CLI（Linux / macOS × amd64 / arm64；
+`| bash` 也可以）：
+
+```sh
+curl -fsSL https://files.example.com/install.sh | sh
+```
+
+脚本从 GitHub Release 下载压缩包，按 `SHA256SUMS` 校验后安装到 `/usr/local/bin`（需要时使用 sudo）
+或 `~/.local/bin`。可用 `BLIFT_INSTALL_DIR`、`BLIFT_VERSION`、`BLIFT_DOWNLOAD_URL`（Release 下载的镜像地址）
+修改默认值。Web 界面「账户设置」里会显示适用于当前服务器的命令。
+
+也可以从[最新 Release](https://github.com/davidliyutong/blift/releases/latest) 手动下载对应平台的压缩包：
 
 ```sh
 VER=0.1.0 OS=$(uname -s | tr A-Z a-z) ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
@@ -163,7 +174,7 @@ sudo install "blift_${VER}_${OS}_${ARCH}/blift" /usr/local/bin/
 或自行构建：`make cli`（本机平台）、`make cli-all`（Linux / macOS × amd64 / arm64）。
 
 ```console
-$ blift login --server https://files.example.com     # 打开浏览器授权，类似 gh auth login
+$ blift login --server https://files.example.com     # 在浏览器中确认授权
 $ blift project ls
 $ blift upload datasets ./build.tar.gz -j 8
 $ blift download datasets build.tar.gz -o ./out/

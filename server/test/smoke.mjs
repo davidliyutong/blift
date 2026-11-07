@@ -158,6 +158,15 @@ const me = await api("GET", "/api/auth/me");
 assert.equal(me.user.role, "admin");
 step("bootstrap admin (one-off secret)");
 
+for (const path of ["/install.sh", "/api/cli/install.sh"]) {
+  const r = await fetch(BASE + path);
+  const sh = await r.text();
+  assert.equal(r.status, 200, `GET ${path} → ${r.status}`);
+  assert.match(r.headers.get("content-type") ?? "", /^text\/plain/);
+  assert.ok(sh.startsWith("#!/bin/sh") && sh.includes(`SERVER='${BASE}'`) && sh.includes(`SERVER_VERSION='${info.version}'`), sh.slice(0, 400));
+}
+step("CLI installer at /install.sh");
+
 const storageCfg = {
   name: "local",
   provider: "rustfs",

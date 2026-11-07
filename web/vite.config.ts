@@ -12,6 +12,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": { target: process.env.BLIFT_API ?? "http://localhost:8787", changeOrigin: false },
+      "/install.sh": { target: process.env.BLIFT_API ?? "http://localhost:8787", changeOrigin: false },
     },
   },
   build: {

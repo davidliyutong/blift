@@ -1,5 +1,5 @@
-// Device-authorization flow for the CLI (same UX as `gh auth login`): the CLI gets a
-// user code, the user approves it in the browser, the CLI polls and receives a token.
+// Device-authorization flow for the CLI: the CLI gets a user code, the user approves it in the
+// browser, the CLI polls and receives a token.
 import { Hono } from "hono";
 import { createSession, requireUser } from "../auth";
 import { now, one, run } from "../db";
@@ -8,8 +8,10 @@ import { sha256Hex } from "../lib/crypto";
 import { ApiError, notFound } from "../lib/errors";
 import { body, optStr, publicOrigin, str } from "../lib/http";
 import { newUserCode, randomString } from "../lib/ids";
+import { installScript } from "../lib/install";
 import { getSettings } from "../services/settings";
 import { toUser } from "../services/users";
+import { VERSION } from "../version";
 
 const TTL = 600_000;
 const INTERVAL = 3;
@@ -27,6 +29,11 @@ type LoginRow = {
 const oauthError = (code: string, message: string) => new ApiError(400, code, message);
 
 const r = new Hono<AppEnv>();
+
+// Also served at /install.sh (see ALIASES in app.ts).
+r.get("/install.sh", (c) =>
+  c.body(installScript(publicOrigin(c), VERSION), 200, { "content-type": "text/plain; charset=utf-8" }),
+);
 
 r.post("/login", async (c) => {
   const b = await c.req.json().catch(() => ({}) as Record<string, unknown>);
