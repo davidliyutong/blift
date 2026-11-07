@@ -11,7 +11,7 @@ WRANGLER := pnpm --filter server exec wrangler
 WRANGLER_CONFIG = $(if $(wildcard server/wrangler.local.toml),wrangler.local.toml,wrangler.toml)
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev dev-server dev-web dev-worker build build-web build-server cli cli-all \
+.PHONY: help install dev dev-server dev-web dev-worker build build-web build-server cli cli-all cli-dist \
         test test-server test-cli typecheck smoke docker docker-up cf-init cf-secrets deploy clean
 
 help: ## Show this help
@@ -51,6 +51,13 @@ cli-all: ## Cross-compile static CLI binaries into bin/blift-<os>-<arch>
 	@for p in $(CLI_PLATFORMS); do os=$${p%/*}; arch=$${p#*/}; echo "→ bin/blift-$$os-$$arch"; \
 	  (cd cli && CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "$(LDFLAGS)" -o ../bin/blift-$$os-$$arch ./cmd/blift) || exit 1; done
 
+cli-dist: cli-all ## Package the CLI as release archives + SHA256SUMS in dist/release (VERSION=vX.Y.Z)
+	@mkdir -p dist/pkg dist/release
+	@for p in $(CLI_PLATFORMS); do os=$${p%/*}; arch=$${p#*/}; n=blift_$(VERSION:v%=%)_$${os}_$${arch}; \
+	  mkdir -p dist/pkg/$$n && cp bin/blift-$$os-$$arch dist/pkg/$$n/blift && cp LICENSE README.md dist/pkg/$$n/ && \
+	  tar -C dist/pkg -czf dist/release/$$n.tar.gz $$n && echo "→ dist/release/$$n.tar.gz" || exit 1; done
+	@cd dist/release && shasum -a 256 blift_$(VERSION:v%=%)_*.tar.gz > SHA256SUMS
+
 # ---- Quality ---------------------------------------------------------------
 
 test: typecheck test-server test-cli ## Typecheck + unit tests (server and CLI)
@@ -72,8 +79,8 @@ smoke: ## End-to-end API + CLI tests against a throwaway RustFS container
 docker: ## Build the Docker image (tags <version> and latest)
 	docker build -f deploy/Dockerfile -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
 
-docker-up: ## Start blift with docker compose (deploy/docker-compose.yml)
-	docker compose -f deploy/docker-compose.yml up -d --build
+docker-up: docker ## Build the image and start it with docker compose (deploy/docker-compose.yml)
+	BLIFT_IMAGE=$(IMAGE):latest docker compose -f deploy/docker-compose.yml up -d
 
 # ---- Cloudflare Workers ----------------------------------------------------
 

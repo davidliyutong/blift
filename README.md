@@ -1,160 +1,242 @@
 # blift
 
-轻量的内部文件共享 / 传输系统，以 S3 兼容对象存储为后端。
-原生运行在 **Cloudflare Workers**（D1 + Workers Assets + Cron），也可以用 **Docker** 自托管（Node + SQLite）。
+[![ci](https://github.com/davidliyutong/blift/actions/workflows/ci.yml/badge.svg)](https://github.com/davidliyutong/blift/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/davidliyutong/blift)](https://github.com/davidliyutong/blift/releases)
+[![license](https://img.shields.io/github/license/davidliyutong/blift)](LICENSE)
 
-*A lightweight internal file-sharing service on top of S3-compatible storage. Runs natively on
-Cloudflare Workers or in Docker. Web UI (Cloudflare Kumo design system, 中文/English) and a
-single-binary Go CLI with browser-based login.*
+English | [简体中文](README.zh-CN.md)
 
-- **极简结构**：只有 `project → blob` 两级，没有文件夹树。
-- **直传**：上传、下载都通过预签名 URL 直接在客户端与 S3 之间进行，服务端只负责签名和记账；大文件自动分片并行上传 / 分段并行下载。
-- **存储后端**：Cloudflare R2、Backblaze B2、AWS S3、RustFS、MinIO 等任何 S3 兼容存储，可配置多个，按项目选择。
-- **分享**：公开链接（单个文件或整个项目），可设置访问密码、有效期、下载次数上限。
-- **账号**：OIDC 登录（优先适配 Authentik，ID Token 支持 HS256 / RS256 / ES256），新用户首次登录自动注册；本地密码账号用于初始管理员；TOTP 两步验证。
-- **管理**：一次性 bootstrap secret 自助创建管理员；在线配置存储后端与 OIDC；仪表盘查看用量、请求数、流量；用户管理与配额调整。
-- **CLI**：`blift login` 像 `gh` 一样在浏览器里授权；管理项目、上传下载、分享；Linux / macOS × amd64 / arm64 静态单文件。
-- **垃圾回收**：未完成的上传、已删除的文件与项目、过期会话与分享由定时任务清理。
+**blift** is a lightweight file-sharing and transfer service for teams, built on any
+S3-compatible object storage (Cloudflare R2, Backblaze B2, AWS S3, RustFS, MinIO…). It runs
+natively on **Cloudflare Workers** (D1 + Workers Assets + Cron) or self-hosted with **Docker**
+(Node + SQLite), and comes with a web UI in Cloudflare's own design language and a single-binary
+**Go CLI** that signs in through the browser like `gh`.
 
-## 目录结构
+File bytes never pass through the server: browsers and the CLI upload and download straight
+from the bucket with presigned URLs, while blift handles accounts, permissions, sharing, quotas
+and bookkeeping.
 
+![Project files](docs/screenshots/files.png)
+
+## Features
+
+- **Flat by design.** Projects contain files, nothing more: no folder trees to manage.
+- **Direct transfers.** Presigned single `PUT` up to 64 MiB, parallel multipart uploads above
+  that (each part retried on its own), parallel ranged downloads in the CLI.
+- **Any S3-compatible storage.** Several backends side by side, chosen per project; `Apply CORS`
+  configures the bucket from the admin UI.
+- **Sharing.** Public links for a single file or a whole project, with optional password,
+  expiry and download limit; recipients need no account.
+- **Single sign-on.** OIDC with PKCE, tuned for Authentik; HS256, RS256 and ES256 ID tokens;
+  users are created on first sign-in and an IdP group can grant the admin role.
+- **Security.** TOTP two-factor authentication, one-off bootstrap secret for the first admin,
+  session tokens stored hashed, storage and IdP credentials encrypted at rest.
+- **Administration.** Dashboard with usage, request and traffic charts; user management with
+  per-user quotas; storage backends and SSO configured online.
+- **CLI.** Browser-based login (device flow), project and member management, parallel
+  uploads/downloads, share links, password-protected share downloads without an account.
+  Static binaries for Linux and macOS on amd64 and arm64.
+- **Garbage collection.** Stale uploads, deleted files and projects, expired sessions and
+  shares are cleaned up on a schedule within Cloudflare's subrequest limits.
+- **English and Chinese** in the web UI and the CLI, light and dark themes.
+
+## Screenshots
+
+| | |
+| --- | --- |
+| ![Admin dashboard](docs/screenshots/dashboard.png) | ![Users](docs/screenshots/users.png) |
+| Admin dashboard: requests, traffic, uploads and downloads | Users with quotas, SSO and 2FA badges |
+| ![Project share](docs/screenshots/share.png) | ![Password-protected share](docs/screenshots/share-locked.png) |
+| A shared project, no account needed | Password, expiry and download limit |
+| ![Storage backends](docs/screenshots/storages.png) | ![Sign in](docs/screenshots/login.png) |
+| Several S3-compatible backends | SSO first, local accounts for admins |
+
+## How it works
+
+```mermaid
+flowchart LR
+  C["Browser / CLI"] -- "API: sign-in, metadata,<br/>presigned URLs" --> S["blift server<br/>(Cloudflare Worker or Node)"]
+  S --- DB[("D1 / SQLite")]
+  S -. "HEAD, ListParts, GC" .-> B[("S3-compatible bucket")]
+  C == "file bytes via presigned URLs" ==> B
+  C -- "OIDC" --> I["Authentik / any OIDC provider"]
 ```
-server/   API（TypeScript + Hono），同一份代码跑在 Workers 和 Node 上
-web/      Web 前端（React + @cloudflare/kumo，中英双语）
-cli/      Go 命令行客户端
-docs/     API.md —— 服务端 / Web / CLI 三方共同遵守的接口契约
-deploy/   Dockerfile、docker-compose.yml
-scripts/  smoke.sh —— 端到端测试（RustFS 容器 + 真实服务端 + CLI）
+
+One TypeScript codebase ([Hono](https://hono.dev)) serves both runtimes; the database layer is
+a small subset of the D1 API, implemented on Node with `node:sqlite`. The HTTP contract shared by
+the server, the web UI and the CLI lives in [docs/API.md](docs/API.md).
+
+## Quick start
+
+### Docker
+
+```sh
+docker run -d --name blift -p 8080:8080 -v blift-data:/data \
+  -e PUBLIC_URL=https://files.example.com \
+  ghcr.io/davidliyutong/blift:latest
+docker logs blift        # prints the one-off bootstrap secret on first start
 ```
 
-## 快速开始（本地开发）
+Open `/setup`, create the admin with the bootstrap secret, then add a storage backend under
+**Administration → Storage backends**. All state lives in `/data` (SQLite database and the
+generated `app-secret`): back it up, because losing `APP_SECRET` makes the stored S3 and OIDC
+credentials unreadable. [deploy/docker-compose.yml](deploy/docker-compose.yml) has the same setup
+plus an optional RustFS service (`--profile s3`).
 
-```bash
-make install        # pnpm install
-make dev            # API :8787（Node + SQLite，数据在 ./data）+ Web :5173
-```
+Images are published for `linux/amd64` and `linux/arm64` with tags `latest`, `X.Y` and `X.Y.Z`.
 
-首次启动时终端会打印 bootstrap secret（也保存在 `data/bootstrap-secret`）。打开 <http://localhost:5173/setup>
-创建管理员，然后在「管理 → 存储」里添加一个存储后端。本地试用可以起一个 RustFS：
+### Cloudflare Workers
 
-```bash
-docker run -d -p 9000:9000 -e RUSTFS_ACCESS_KEY=blift -e RUSTFS_SECRET_KEY=blift-secret rustfs/rustfs
-# 存储配置：endpoint http://localhost:9000，region us-east-1，path-style 开启，再点「应用 CORS」
-```
+Requires a Cloudflare account, Node.js ≥ 22.13, pnpm and Go (for the CLI).
 
-常用目标见 `make help`：`make test`（类型检查 + 单元测试）、`make smoke`（端到端）、`make build`、`make cli-all`。
-
-## 部署到 Cloudflare Workers
-
-```bash
+```sh
+git clone https://github.com/davidliyutong/blift && cd blift
 make install
 pnpm --filter server exec wrangler login
-make cf-init        # 创建 D1 数据库，生成 server/wrangler.local.toml（git 忽略）并写入其 ID
-make cf-secrets     # 生成 APP_SECRET 与 BOOTSTRAP_SECRET（会打印后者）
-make deploy         # 构建前端并 wrangler deploy（API + 静态资源 + 每 15 分钟的 GC Cron）
+make cf-init        # creates the D1 database and server/wrangler.local.toml (git-ignored)
+make cf-secrets     # stores APP_SECRET and BOOTSTRAP_SECRET, prints the latter
+make deploy         # builds the web UI and deploys API + static assets + the GC cron
 ```
 
-数据库迁移在 Worker 第一次处理请求时自动执行，无需手动 `d1 migrations apply`。
-仓库里的 `server/wrangler.toml` 只是模板；你自己的部署配置（D1 ID、自定义域名、`PUBLIC_URL`）放在
-`server/wrangler.local.toml`，它被 git 忽略，Makefile 中的 wrangler 命令会自动优先使用它。
+Migrations run automatically on the first request. The committed `server/wrangler.toml` is a
+template; your deployment's values (D1 id, custom domain, `PUBLIC_URL`) go in
+`server/wrangler.local.toml`, which the Makefile uses whenever it exists. For a custom domain add
+`routes = [{ pattern = "files.example.com", custom_domain = true }]` together with
+`workers_dev = true` (wrangler otherwise turns the `*.workers.dev` URL off), and set `PUBLIC_URL`
+under `[vars]` when the Worker has more than one hostname.
 
-自定义域名：在 `wrangler.local.toml` 中加 `routes = [{ pattern = "files.example.com", custom_domain = true }]`，
-并同时写 `workers_dev = true`（否则 wrangler 会关闭 `*.workers.dev` 地址）。Worker 有多个域名时，在 `[vars]`
-中设置 `PUBLIC_URL` 作为规范地址：OIDC 回调、分享链接和 CLI 登录链接都会使用它。
+### Local development
 
-## Docker 部署
-
-```bash
-make docker                                   # 构建镜像 blift:latest
-docker run -d -p 8080:8080 -v blift-data:/data -e PUBLIC_URL=https://files.example.com blift
-docker logs <container>                       # 首次启动会打印 bootstrap secret
+```sh
+make install
+make dev            # API on :8787 (Node + SQLite in ./data) and the web UI on :5173
+docker run -d -p 9000:9000 -e RUSTFS_ACCESS_KEY=blift -e RUSTFS_SECRET_KEY=blift-secret rustfs/rustfs
 ```
 
-或使用 `deploy/docker-compose.yml`（含可选的 RustFS，`--profile s3`）。所有状态都在 `/data`
-（SQLite 数据库 + 自动生成的 `app-secret`），请备份该卷：丢失 `APP_SECRET` 会导致已保存的 S3 / OIDC 密钥无法解密。
+The bootstrap secret is printed on first start (and saved in `data/bootstrap-secret`). Add the
+RustFS bucket with endpoint `http://localhost:9000`, region `us-east-1` and path-style on, then
+click **Apply CORS**.
 
-| 环境变量 | 说明 |
+## Configuration
+
+| Variable | Description |
 | --- | --- |
-| `PUBLIC_URL` | 对外访问地址，用于分享链接、OIDC 回调、CLI 登录链接。默认取请求的 Host / `X-Forwarded-*` |
-| `BOOTSTRAP_SECRET` | 一次性管理员注册密钥；不设置则自动生成到 `/data/bootstrap-secret`。存在活跃管理员后即失效 |
-| `APP_SECRET` | 会话签名与凭据加密密钥；不设置则自动生成到 `/data/app-secret` |
-| `PORT` / `DATA_DIR` / `WEB_DIR` | 默认 `8080` / `/data` / `/app/web` |
-| `GC_BUDGET` | 每轮 GC 最多发起的 S3 请求数（Node 默认 1000，Workers 默认 40） |
+| `PUBLIC_URL` | Canonical origin for share links, the OIDC redirect URI and CLI login links. Defaults to the request's host (`X-Forwarded-*` aware). |
+| `BOOTSTRAP_SECRET` | One-off secret to create the first admin. Docker generates it into `/data/bootstrap-secret` when unset. Stops working once an active admin exists. |
+| `APP_SECRET` | Signs cookies and tokens and encrypts stored credentials. Docker generates it into `/data/app-secret` when unset. |
+| `PORT`, `DATA_DIR`, `WEB_DIR` | Node only. Defaults: `8080`, `/data`, `/app/web`. |
+| `GC_BUDGET` | Maximum S3 requests per garbage-collection run (Node 1000, Workers 40). |
 
-## 配置存储后端
+Everything else (site name, default quota, storage backends, SSO) is configured in the web UI.
 
-浏览器会直接向存储发起 `PUT` / `GET`，因此 **bucket 必须允许 Web 页面所在源的 CORS**（允许 `GET, PUT, HEAD`，
-Header `*`）。管理页里的「应用 CORS」会调用 `PutBucketCors` 自动配置；不支持该接口的服务需在其控制台配置。
-存储的 endpoint 必须能被服务端和用户浏览器以**同一个地址**访问（预签名 URL 绑定了 Host）。
+## Storage backends
 
-| 服务 | Endpoint | Region | Path-style | 备注 |
+Browsers talk to the bucket directly, so the bucket must allow CORS from blift's origin
+(`GET`, `PUT`, `HEAD`, any header). **Apply CORS** in the admin UI sets this with
+`PutBucketCors` where the provider and key allow it. The endpoint must be reachable under the
+same URL by the server and by users' browsers, since presigned URLs are bound to the host.
+
+| Provider | Endpoint | Region | Path-style | Notes |
 | --- | --- | --- | --- | --- |
-| Cloudflare R2 | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` | `auto` | 开 | R2 API Token（Object Read & Write） |
-| Backblaze B2 | `https://s3.<region>.backblazeb2.com` | 如 `us-west-004` | 开 | 必须设生命周期，见下文 |
-| AWS S3 | `https://s3.<region>.amazonaws.com` | 如 `us-east-1` | 关 | |
-| RustFS / MinIO | `http(s)://<host>:9000` | `us-east-1` | 开 | |
+| Cloudflare R2 | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` | `auto` | on | R2 API token with Object Read & Write |
+| Backblaze B2 | `https://s3.<region>.backblazeb2.com` | e.g. `us-west-004` | on | needs the lifecycle rule below |
+| AWS S3 | `https://s3.<region>.amazonaws.com` | e.g. `us-east-1` | off | |
+| RustFS / MinIO | `http(s)://<host>:9000` | `us-east-1` | on | |
 
-建议在 bucket 上再加一条生命周期规则「2 天后中止未完成的分片上传」作为兜底（GC 已会处理，属于双保险）。
+**Backblaze B2.** B2 keeps every version of a file, and an S3 delete without a version id only
+hides it. Set the bucket's lifecycle to **Keep only the last version of the file**, otherwise
+deleted files keep using (and billing) space. Use a private bucket without Object Lock and an
+application key restricted to it with read and write access (the master key does not work with
+the S3 API). The B2 console's CORS presets do not allow uploads: either click **Apply CORS** once
+with a key that is not restricted to one bucket, or set the rules with the
+[b2 CLI](https://www.backblaze.com/docs/cloud-storage-command-line-tools):
 
-### Backblaze B2
+```sh
+b2 bucket update <bucket> allPrivate --cors-rules '[{"corsRuleName":"blift","allowedOrigins":["https://files.example.com"],
+  "allowedOperations":["s3_get","s3_head","s3_put"],"allowedHeaders":["*"],"exposeHeaders":["ETag"],"maxAgeSeconds":3600}]'
+```
 
-1. **建桶**：Files in Bucket 选 **Private**，不要开 Object Lock。Endpoint 与 Region 见桶详情页的
-   「Endpoint」（如 `s3.us-west-004.backblazeb2.com` → Region `us-west-004`）。
-2. **生命周期（必须）**：桶设置 → Lifecycle Settings → **Keep only the last version of the file**。
-   B2 总是保留所有版本，S3 接口的删除（不带 VersionId）只会插入隐藏标记；不设此规则，GC 删掉的文件会一直占用空间、产生费用。
-   设置后被隐藏的版本 1 天后真正删除。
-3. **Application Key**：限定到该桶、Read and Write 即可（需要 readFiles / writeFiles / deleteFiles / listFiles）。
-   B2 的主密钥（master key）不能用于 S3 接口。
-4. **CORS**：B2 控制台里的 CORS 预设只允许下载，不含上传用的 `PUT`。二选一：
-   - 用一个**不限定桶**的 Read and Write 密钥（含 `writeBuckets`）点「应用 CORS」，之后可换回限定桶的密钥；
-   - 或用 [b2 CLI](https://www.backblaze.com/docs/cloud-storage-command-line-tools) 设置（`<bucket>` 与域名替换为实际值）：
+## Single sign-on (Authentik)
 
-     ```bash
-     b2 account authorize
-     b2 bucket update <bucket> allPrivate --cors-rules '[{"corsRuleName":"blift","allowedOrigins":["https://<你的域名>"],
-       "allowedOperations":["s3_get","s3_head","s3_put"],"allowedHeaders":["*"],"exposeHeaders":["ETag"],"maxAgeSeconds":3600}]'
-     ```
-5. 下载走预签名 URL 直连 B2，不经过 Cloudflare，因此不享受 Bandwidth Alliance 免流量；B2 每月免费出口流量为存储量的 3 倍。
+1. In Authentik, create an **OAuth2/OpenID Provider** (client type *Confidential*) with the
+   redirect URI shown in blift's settings: `https://<your-domain>/api/auth/oidc/callback`.
+   With a signing key the ID token is RS256; without one it is HS256 signed with the client
+   secret. Both work.
+2. Create an **Application** that uses the provider and note its slug.
+3. In blift, **Administration → Settings → OIDC**: issuer
+   `https://<authentik>/application/o/<slug>/`, client id and secret, scopes
+   `openid profile email`. **Test** checks the discovery document.
+4. Optionally set an **admin group** (e.g. `blift-admins`): members become admins when they sign in.
 
-## 对接 OIDC（Authentik）
-
-1. Authentik → Applications → Providers → 新建 **OAuth2/OpenID Provider**：Client type `Confidential`，
-   Redirect URI 填管理页显示的回调地址 `https://<你的域名>/api/auth/oidc/callback`；
-   Signing Key 选一个证书则 ID Token 为 **RS256**，留空则为 **HS256**（以 client secret 签名），两者都支持。
-2. 新建 Application 绑定该 Provider，记下 slug。
-3. blift → 管理 → 设置 → OIDC：Issuer 填 `https://<authentik>/application/o/<slug>/`，填入 Client ID / Secret，
-   Scopes 保持 `openid profile email`，可点「测试」检查 discovery。
-4. 可选「管理员组」：例如 `blift-admins`，该组成员（`groups` claim）登录时自动成为管理员。
-
-新用户首次 OIDC 登录即自动注册（默认配额见设置）；若邮箱与已有的本地账号一致，则自动关联到该账号。
-开启了 TOTP 的用户在 OIDC 登录后仍需输入验证码。
+Users are created on their first sign-in; an existing local account with the same email is
+linked instead. Users who enable blift's TOTP enter their code after the SSO round trip.
 
 ## CLI
 
-```bash
-make cli            # 或 make cli-all 交叉编译 linux/darwin × amd64/arm64 到 bin/
-blift login --server https://files.example.com     # 打开浏览器授权（--no-browser 只打印链接）
-blift project create demo
-blift upload demo ./build.tar.gz ./notes.md -j 8
-blift ls demo
-blift download demo build.tar.gz -o ./out/
-blift share create demo build.tar.gz --password 1234 --expires 7d
-blift share get https://files.example.com/s/AbCdEf123456 --password 1234    # 无需登录
+Download the archive for your platform from the
+[latest release](https://github.com/davidliyutong/blift/releases/latest):
+
+```sh
+VER=0.1.0 OS=$(uname -s | tr A-Z a-z) ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -fsSL "https://github.com/davidliyutong/blift/releases/download/v$VER/blift_${VER}_${OS}_${ARCH}.tar.gz" | tar -xz
+sudo install "blift_${VER}_${OS}_${ARCH}/blift" /usr/local/bin/
 ```
 
-更多见 [cli/README.md](cli/README.md)。界面语言跟随 `LANG`，或用 `--lang zh|en` / `BLIFT_LANG`。
+Or build it: `make cli` (this platform) or `make cli-all` (Linux and macOS, amd64 and arm64).
 
-## 设计取舍与 Cloudflare 限制
+```console
+$ blift login --server https://files.example.com     # opens the browser, like gh auth login
+$ blift project ls
+NAME            OWNER  ROLE   FILES  SIZE       UPDATED           ID
+datasets        alice  owner  2      12.0 MiB   2026-11-07 20:39  2rrrsvmr54gnc3ua
+design-assets   alice  owner  4      32.0 MiB   2026-11-07 20:39  23qs5oxdm6teokgb
+release-builds  alice  owner  6      226.3 MiB  2026-11-07 20:39  nkqboruqznospkir
+$ blift upload datasets ./build.tar.gz -j 8
+✓ Uploaded build.tar.gz (2.9 MiB) to datasets
+$ blift share create release-builds CHANGELOG.md --password launch --expires 7d
+https://files.example.com/s/83aAZff7bSgz
+✓ Share created (expires: 2026-11-14 20:41)
+$ blift share get https://files.example.com/s/83aAZff7bSgz --password launch    # no account needed
+```
 
-- 文件字节从不经过 Worker（Workers 请求体上限 100 MB、CPU 时间宝贵）：单文件 ≤ 64 MiB 直接预签名 PUT，更大的走分片（固定分片大小 ≥ 16 MiB，满足 R2 等长分片要求，最多 10 000 片）。
-- 分片 URL 按每批 ≤ 100 个签发，纯本地签名，不产生子请求；完成上传时服务端用 `ListParts` 自行收集 ETag，并 `HEAD` 校验实际大小后才计入配额。
-- GC 每轮的 S3 请求数受预算控制（免费版 Workers 每次调用 50 个子请求），删除使用 `DeleteObjects` 每次 1000 个 key，出站并发 ≤ 6。
-- D1：单条语句绑定参数 ≤ 100，`IN (...)` 自动分块；多语句写入用 `batch` 保证原子性；统计计数每请求一次 upsert 且在 `waitUntil` 中执行；会话最近使用时间 5 分钟才写一次。
-- 静态资源由 Workers Assets 直接返回，不消耗 Worker 调用。
-- 密码使用 PBKDF2-SHA256 10 万次迭代（Workers 上限）；免费版 10 ms CPU 限制下密码登录可能偶发超时，生产建议付费版或使用 OIDC。
-- 删除是异步的：删除文件 / 项目立即释放配额并从列表消失，对象由 GC 清理；用量计数每日按实际数据校准一次。
-- 下载流量按签发下载链接时的文件大小统计（数据不经过服务端，无法精确计量）。
+See [cli/README.md](cli/README.md) for all commands. The language follows `LANG`, or
+`--lang zh|en` / `BLIFT_LANG`.
 
-## 许可
+## Design notes and Cloudflare limits
 
-内部项目。
+- File bytes never go through the Worker (100 MB request bodies, scarce CPU). Multipart uploads
+  use a fixed part size of at least 16 MiB (R2 requires equal parts) and up to 10,000 parts.
+- Part URLs are signed locally in batches of up to 100, costing no subrequests. On completion the
+  server collects ETags with `ListParts` and checks the real size with `HEAD` before counting it
+  against the quota.
+- Each GC run stays within a subrequest budget (50 per invocation on the free plan), deletes with
+  `DeleteObjects` (1,000 keys per call) and keeps outbound concurrency at 6 or less.
+- D1: at most 100 bound parameters per statement (`IN (...)` lists are chunked), multi-statement
+  writes in `batch`, one stats upsert per request in `waitUntil`, session "last used" written at
+  most every 5 minutes.
+- Passwords use PBKDF2-SHA256 with 100,000 iterations, the Workers maximum. On the free plan's
+  10 ms CPU limit a password sign-in can occasionally time out; use SSO or the paid plan.
+- Deletes are asynchronous: quota is released immediately and GC removes the objects; usage
+  counters are reconciled against the real data once a day.
+- Download traffic is counted from the file size when a download URL is issued, since the bytes
+  never reach the server.
+
+## Development
+
+```text
+server/   API (TypeScript + Hono), the same code on Workers and Node
+web/      web UI (React 19, Vite, @cloudflare/kumo, English and Chinese)
+cli/      Go CLI
+docs/     API.md, the contract shared by server, web UI and CLI
+deploy/   Dockerfile, docker-compose.yml
+scripts/  smoke.sh, the end-to-end test (RustFS container + real server + CLI)
+```
+
+`make help` lists the targets. `make test` runs the typecheck and the unit tests,
+`make smoke` the end-to-end suite (needs Docker), `make build` everything. Changes to the API
+start in [docs/API.md](docs/API.md); [AGENTS.md](AGENTS.md) describes the architecture and the
+conventions for contributors (human or not). Releases are described in [RELEASING.md](RELEASING.md).
+
+## License
+
+[MIT](LICENSE)

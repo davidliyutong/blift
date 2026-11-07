@@ -1,5 +1,8 @@
 # docker compose -f deploy/docker-compose.yml up -d
 #
+# Runs the release image; `make docker-up` builds and runs a local image instead
+# (BLIFT_IMAGE=blift:latest).
+#
 # On first start the log prints the one-off bootstrap secret (or set BOOTSTRAP_SECRET);
 # open http://<host>:8080/setup, create the admin, then add a storage backend.
 #
@@ -10,10 +13,7 @@
 # "http://rustfs:9000" and not "http://localhost:9000".
 services:
   blift:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    image: blift:latest
+    image: ${BLIFT_IMAGE:-ghcr.io/davidliyutong/blift:latest}
     restart: unless-stopped
     ports:
       - "8080:8080"

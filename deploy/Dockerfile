@@ -1,6 +1,10 @@
 # Self-hosted blift: Node runtime + SQLite (node:sqlite). Build from the repo root:
 #   docker build -f deploy/Dockerfile -t blift .
-FROM node:24-alpine AS build
+# Release images: ghcr.io/davidliyutong/blift (linux/amd64, linux/arm64).
+
+# The build output is plain JavaScript, so it is built once on the build machine's platform
+# and only copied into each target platform's runtime image.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS build
 WORKDIR /src
 RUN npm install -g pnpm@10.18.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -12,6 +16,9 @@ COPY web web
 RUN pnpm --filter web build && pnpm --filter server build
 
 FROM node:24-alpine
+LABEL org.opencontainers.image.source="https://github.com/davidliyutong/blift" \
+      org.opencontainers.image.description="Lightweight file sharing on S3-compatible object storage" \
+      org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 ENV NODE_ENV=production DATA_DIR=/data WEB_DIR=/app/web PORT=8080
 # The server bundle is self-contained (no node_modules needed).

@@ -22,7 +22,12 @@ make deploy        # 部署到 Workers；优先使用 git 忽略的 server/wrang
 ```
 
 改了 API 行为就跑 `make smoke`；只改 UI 至少跑 `pnpm --filter web build`。
-`server/wrangler.toml` 是提交到仓库的通用模板，不要写入真实的 D1 ID、域名或 `PUBLIC_URL`；这些放在 `server/wrangler.local.toml`。
+`server/wrangler.toml` 是提交到仓库的通用模板，不要写入真实的 D1 ID、域名或 `PUBLIC_URL`；这些放在 `server/wrangler.local.toml`（CI 会检查）。
+
+CI（`.github/workflows/ci.yml`）在 PR 和 main 上跑 `make test`、`make build cli-all`、`make smoke` 和 Docker 构建。
+发版由 `v*` 标签触发（`.github/workflows/release.yml`）：CLI 压缩包 + SHA256SUMS + GHCR 多架构镜像 + GitHub Release，
+标签必须与 `server/src/version.ts` 和 `CHANGELOG.md` 一致，步骤见 `RELEASING.md`。用户可见的改动记到 `CHANGELOG.md` 的 `[Unreleased]`。
+README 有英文（`README.md`）和中文（`README.zh-CN.md`）两份，改功能时同步更新。
 
 ## 修改 API 的流程
 
