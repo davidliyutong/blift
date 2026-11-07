@@ -148,6 +148,7 @@ var en = map[string]string{
 	"api.expired_token":         "login request expired; run `blift login` again",
 	"api.not_configured":        "server not configured",
 	"api.storage_error":         "storage backend error",
+	"api.upstream_error":        "could not reach GitHub Releases",
 	"api.oidc_error":            "OIDC provider error",
 	"api.internal":              "internal server error",
 }
@@ -295,6 +296,7 @@ var zh = map[string]string{
 	"api.expired_token":         "登录请求已过期，请重新运行 `blift login`",
 	"api.not_configured":        "服务器尚未配置",
 	"api.storage_error":         "存储后端出错",
+	"api.upstream_error":        "无法连接 GitHub Releases",
 	"api.oidc_error":            "OIDC 身份提供方出错",
 	"api.internal":              "服务器内部错误",
 }

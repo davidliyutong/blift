@@ -10,8 +10,9 @@ All notable changes are documented here. The format follows
 
 - CLI installer served by every blift server: `curl -fsSL https://<server>/install.sh | sh`
   installs the CLI release matching the server version into `~/.local/bin` (SHA-256 verified,
-  no sudo) and prints the
-  `blift login` command for that server. Account settings show the command.
+  no sudo) and prints the `blift login` command for that server. Account settings show the command.
+- `GET /api/cli/download/…` relays the CLI release files from GitHub Releases (edge-cached on
+  Workers), so clients without GitHub access can install the CLI; the installer uses it first.
 
 ## [0.1.0] - 2026-11-07
 

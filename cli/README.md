@@ -9,8 +9,8 @@ blift 的命令行客户端（Go，单一静态二进制，支持 Linux/macOS ×
 curl -fsSL https://<你的 blift 服务器>/install.sh | sh
 ```
 
-安装与该服务器版本一致的 CLI（来自 GitHub Release，校验 SHA-256）。可选环境变量：
-`BLIFT_INSTALL_DIR`（安装目录，默认 `~/.local/bin`）、`BLIFT_VERSION`（指定版本）、`BLIFT_DOWNLOAD_URL`（Release 下载镜像）。
+安装与该服务器版本一致的 CLI：经服务器中转 GitHub Release 下载（失败时直连 GitHub），校验 SHA-256。可选环境变量：
+`BLIFT_INSTALL_DIR`（安装目录，默认 `~/.local/bin`）、`BLIFT_VERSION`（指定版本）、`BLIFT_DOWNLOAD_URL`（只从该镜像下载）。
 
 ## 构建与测试
 

@@ -114,14 +114,13 @@ describe("migrations", () => {
 });
 
 describe("install.sh", () => {
-  const server = "https://files.example.com/o'neil"; // the quote must survive sh quoting
-  const script = installScript(server, "9.8.7");
-
-  // Runs the script the way `curl … | sh` does, against a file:// "mirror" with fake releases.
-  it.each(["sh", "bash"])("installs and verifies the checksum (%s)", (shell) => {
+  // Runs the script the way `curl … | sh` does. file:// URLs stand in for the server's relay
+  // (<server>/api/cli/download) and for GitHub Releases, serving fake release files.
+  it.each(["sh", "bash"])("downloads via the server, falls back to GitHub, verifies the checksum (%s)", (shell) => {
     const root = mkdtempSync(join(tmpdir(), "blift-install-"));
     try {
-      const rel = join(root, "mirror", "v9.8.7");
+      const server = `file://${root}/srv`;
+      const rel = join(root, "srv", "api", "cli", "download", "v9.8.7");
       mkdirSync(rel, { recursive: true });
       const sums: string[] = [];
       for (const os of ["linux", "darwin"])
@@ -138,21 +137,35 @@ describe("install.sh", () => {
         HOME: root,
         LANG: "zh_CN.UTF-8", // bash 3.2 would read "$x）" as one name: messages must use ${x}
         SHELL: "/bin/zsh",
-        BLIFT_DOWNLOAD_URL: `file://${join(root, "mirror")}`,
       };
-      const ok = spawnSync(shell, [], { input: script, env });
-      expect(ok.status, ok.stderr.toString()).toBe(0);
-      const out = ok.stdout.toString();
-      expect(out).toContain("blift v9.8.7 (test)");
-      // Defaults to the user's own ~/.local/bin and tells how to put it on PATH.
-      expect(readFileSync(join(root, ".local", "bin", "blift"), "utf8")).toContain("v9.8.7");
-      expect(out).toContain(`echo 'export PATH="${join(root, ".local", "bin")}:$PATH"' >> ~/.zshrc`);
-      expect(out).toContain(`blift login --server ${server}`);
+      const run = (script: string, extra: Record<string, string> = {}) => {
+        const r = spawnSync(shell, [], { input: script, env: { ...env, ...extra } });
+        return { status: r.status, out: r.stdout.toString(), err: r.stderr.toString() };
+      };
 
+      // 1. Through the server's relay; GitHub is never needed.
+      const viaServer = run(installScript(server, "9.8.7", `file://${root}/no-github`));
+      expect(viaServer.status, viaServer.err).toBe(0);
+      expect(viaServer.out).toContain("blift v9.8.7 (test)");
+      expect(viaServer.out).not.toContain("无法从");
+      // Installs into the user's own ~/.local/bin and tells how to put it on PATH.
+      expect(readFileSync(join(root, ".local", "bin", "blift"), "utf8")).toContain("v9.8.7");
+      expect(viaServer.out).toContain(`echo 'export PATH="${join(root, ".local", "bin")}:$PATH"' >> ~/.zshrc`);
+      expect(viaServer.out).toContain(`blift login --server ${server}`);
+
+      // 2. The relay fails (an intranet server without internet access): GitHub directly. The quote
+      //    in the server URL must survive sh quoting.
+      const odd = `file://${root}/o'neil`;
+      const fallback = run(installScript(odd, "9.8.7", `file://${root}/srv/api/cli/download`));
+      expect(fallback.status, fallback.err).toBe(0);
+      expect(fallback.out).toContain(`无法从 ${odd}/api/cli/download 下载`);
+      expect(fallback.out).toContain(`blift login --server ${odd}`);
+
+      // 3. A tampered archive is refused.
       writeFileSync(join(rel, "SHA256SUMS"), sums.map((l) => "0".repeat(64) + l.slice(64)).join("\n"));
-      const bad = spawnSync(shell, [], { input: script, env: { ...env, LANG: "C" } });
+      const bad = run(installScript(server, "9.8.7"), { LANG: "C" });
       expect(bad.status).not.toBe(0);
-      expect(bad.stderr.toString()).toContain("SHA-256 mismatch");
+      expect(bad.err).toContain("SHA-256 mismatch");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

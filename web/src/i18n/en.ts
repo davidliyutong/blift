@@ -95,6 +95,7 @@ export const en = {
   "err.expired_token": "The request has expired",
   "err.not_configured": "Not configured yet",
   "err.storage_error": "Storage backend error",
+  "err.upstream_error": "Could not reach GitHub Releases",
   "err.oidc_error": "Identity provider error",
   "err.internal": "Internal server error",
   "err.upload_failed": "Upload failed",

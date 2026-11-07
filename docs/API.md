@@ -42,6 +42,7 @@ and the CLI (`cli/`). Change it together with the code.
 | `expired_token` | 400 | CLI login request expired |
 | `not_configured` | 503 | storage / OIDC / bootstrap secret not configured |
 | `storage_error` | 502 | the S3 backend returned an error (`message` has details) |
+| `upstream_error` | 502 | GitHub Releases could not be reached (CLI download relay) |
 | `oidc_error` | 502 | OIDC provider error |
 | `internal` | 500 | bug |
 
@@ -140,9 +141,13 @@ OIDC: users are auto-registered on first login (matched by `sub`). ID tokens sig
 
 `GET /api/cli/install.sh`, also served at `/install.sh` (no auth) → `text/plain` POSIX sh script for
 `curl -fsSL https://host/install.sh | sh`. It installs the CLI release matching the server's
-version from GitHub Releases (verified against `SHA256SUMS`) and prints
-`blift login --server <public origin>`. Client-side overrides: `BLIFT_VERSION`,
-`BLIFT_INSTALL_DIR`, `BLIFT_DOWNLOAD_URL`.
+version (verified against `SHA256SUMS`) and prints `blift login --server <public origin>`.
+It downloads through the relay below and falls back to GitHub Releases directly.
+Client-side overrides: `BLIFT_VERSION`, `BLIFT_INSTALL_DIR`, `BLIFT_DOWNLOAD_URL` (only this mirror).
+
+`GET /api/cli/download/v<version>/<file>` (no auth) relays a file of the GitHub release `v<version>`:
+`blift_<version>_<os>_<arch>.tar.gz` or `SHA256SUMS`; anything else → `404 not_found`. GitHub
+unreachable → `502 upstream_error`. Responses are `immutable`; Workers keep them in the edge cache.
 
 ## CLI login (device flow)
 

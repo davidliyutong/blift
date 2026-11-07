@@ -180,10 +180,13 @@ Every blift server hosts an installer for the CLI release that matches its versi
 curl -fsSL https://files.example.com/install.sh | sh
 ```
 
-It downloads the archive from GitHub Releases, checks it against `SHA256SUMS` and installs to
-your own `~/.local/bin` (no sudo), printing how to add it to `PATH` if needed. `BLIFT_INSTALL_DIR`,
-`BLIFT_VERSION` and `BLIFT_DOWNLOAD_URL` (a mirror of the release downloads) change those defaults. Account
-settings in the web UI show the command for your server.
+The archive comes through the blift server itself, which relays GitHub Releases (on Workers
+from Cloudflare's edge cache), so machines that cannot reach GitHub can still install it. If the
+relay fails, e.g. a server without internet access, the script downloads from GitHub directly.
+It checks the archive against `SHA256SUMS` and installs to your own `~/.local/bin` (no sudo),
+printing how to add it to `PATH` if needed. `BLIFT_INSTALL_DIR`, `BLIFT_VERSION` and
+`BLIFT_DOWNLOAD_URL` (download only from this mirror of the release files) change those defaults.
+Account settings in the web UI show the command for your server.
 
 Or download the archive for your platform from the
 [latest release](https://github.com/davidliyutong/blift/releases/latest) yourself:

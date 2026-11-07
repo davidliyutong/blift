@@ -8,7 +8,7 @@ import { sha256Hex } from "../lib/crypto";
 import { ApiError, notFound } from "../lib/errors";
 import { body, optStr, publicOrigin, str } from "../lib/http";
 import { newUserCode, randomString } from "../lib/ids";
-import { installScript } from "../lib/install";
+import { installScript, RELEASE_DOWNLOADS } from "../lib/install";
 import { getSettings } from "../services/settings";
 import { toUser } from "../services/users";
 import { VERSION } from "../version";
@@ -34,6 +34,36 @@ const r = new Hono<AppEnv>();
 r.get("/install.sh", (c) =>
   c.body(installScript(publicOrigin(c), VERSION), 200, { "content-type": "text/plain; charset=utf-8" }),
 );
+
+// CLI release files relayed from GitHub Releases, for clients that cannot reach GitHub (install.sh
+// tries this first). Only blift's own release files, which never change once published; Workers
+// keep them in the edge cache, so GitHub is asked about once per file and data center.
+const TAG = /^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$/;
+const ARCHIVE = /^blift_(.+)_(linux|darwin)_(amd64|arm64)\.tar\.gz$/;
+
+r.get("/download/:tag/:file", async (c) => {
+  const { tag, file } = c.req.param();
+  const version = TAG.exec(tag)?.[1];
+  if (!version || (file !== "SHA256SUMS" && ARCHIVE.exec(file)?.[1] !== version)) throw notFound("release file");
+
+  const cache = typeof caches === "undefined" ? undefined : await caches.open("cli-releases"); // Workers only
+  const key = new Request(new URL(c.req.path, c.req.url));
+  const hit = await cache?.match(key);
+  if (hit) return new Response(hit.body, hit); // mutable headers for the middleware
+
+  const res = await fetch(`${RELEASE_DOWNLOADS}/${tag}/${file}`, { headers: { "user-agent": `blift-server/${VERSION}` } });
+  if (res.status === 404) throw notFound("release file");
+  if (!res.ok || !res.body) throw new ApiError(502, "upstream_error", `GitHub Releases answered HTTP ${res.status}`);
+  const headers = new Headers({
+    "content-type": file === "SHA256SUMS" ? "text/plain; charset=utf-8" : "application/gzip",
+    "cache-control": "public, max-age=31536000, immutable",
+  });
+  const length = res.headers.get("content-length");
+  if (length) headers.set("content-length", length);
+  const out = new Response(res.body, { headers });
+  if (cache) c.executionCtx.waitUntil(cache.put(key, out.clone()));
+  return out;
+});
 
 r.post("/login", async (c) => {
   const b = await c.req.json().catch(() => ({}) as Record<string, unknown>);

@@ -159,9 +159,10 @@ b2 bucket update <bucket> allPrivate --cors-rules '[{"corsRuleName":"blift","all
 curl -fsSL https://files.example.com/install.sh | sh
 ```
 
-脚本从 GitHub Release 下载压缩包，按 `SHA256SUMS` 校验后安装到当前用户的 `~/.local/bin`（无需 sudo），
-如果它不在 `PATH` 中会给出加入的命令。可用 `BLIFT_INSTALL_DIR`、`BLIFT_VERSION`、`BLIFT_DOWNLOAD_URL`（Release 下载的镜像地址）
-修改默认值。Web 界面「账户设置」里会显示适用于当前服务器的命令。
+压缩包经由 blift 服务端中转 GitHub Release 下载（Workers 上命中 Cloudflare 边缘缓存），访问不了 GitHub
+的机器也能安装；中转失败时（例如服务端本身不能上外网）改为直连 GitHub。下载后按 `SHA256SUMS` 校验，
+安装到当前用户的 `~/.local/bin`（无需 sudo），如果它不在 `PATH` 中会给出加入的命令。可用 `BLIFT_INSTALL_DIR`、
+`BLIFT_VERSION`、`BLIFT_DOWNLOAD_URL`（只从这个 Release 文件镜像下载）修改默认值。Web 界面「账户设置」里会显示适用于当前服务器的命令。
 
 也可以从[最新 Release](https://github.com/davidliyutong/blift/releases/latest) 手动下载对应平台的压缩包：
 

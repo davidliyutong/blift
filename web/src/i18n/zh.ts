@@ -97,6 +97,7 @@ export const zh: Dict = {
   "err.expired_token": "请求已过期",
   "err.not_configured": "尚未配置",
   "err.storage_error": "存储后端错误",
+  "err.upstream_error": "无法连接 GitHub Releases",
   "err.oidc_error": "身份提供商错误",
   "err.internal": "服务器内部错误",
   "err.upload_failed": "上传失败",

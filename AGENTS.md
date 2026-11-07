@@ -54,7 +54,7 @@ README 有英文（`README.md`）和中文（`README.zh-CN.md`）两份，改功
 
 ### Cloudflare 限制清单（写服务端代码时逐条自查）
 
-- 文件字节**绝不**经过服务端：上传/下载全部是预签名 URL。
+- 文件字节**绝不**经过服务端：上传/下载全部是预签名 URL。唯一例外是 `/api/cli/download` 中转 CLI 发布文件（几 MB、白名单、`immutable` + 边缘缓存）。
 - 每次 S3 调用都是子请求（免费版每次调用 50 个）：请求路径里最多 1–2 次；批量工作放到 GC 并受 `GC_BUDGET` 约束。
 - 出站并发 ≤ 6：用 `lib/http.ts` 的 `pool(items, 6, fn)`。
 - D1 单语句绑定参数 ≤ 100：`IN (...)` 用 `chunks()` + `placeholders()`；多语句一致性用 `db.batch()`。

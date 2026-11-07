@@ -167,6 +167,17 @@ for (const path of ["/install.sh", "/api/cli/install.sh"]) {
 }
 step("CLI installer at /install.sh");
 
+// The CLI download relay (a published release, fetched from GitHub by the server).
+const relay = (p) => fetch(`${BASE}/api/cli/download/${p}`);
+const sumsRes = await relay("v0.1.0/SHA256SUMS");
+assert.equal(sumsRes.status, 200);
+const sums = await sumsRes.text();
+const archive = Buffer.from(await (await relay("v0.1.0/blift_0.1.0_linux_amd64.tar.gz")).arrayBuffer());
+assert.ok(sums.includes(`${sha(archive)}  blift_0.1.0_linux_amd64.tar.gz`), "relayed archive matches SHA256SUMS");
+for (const p of ["v0.1.0/blift_0.2.0_linux_amd64.tar.gz", "v0.1.0/README.md", "latest/SHA256SUMS", "v0.1.0/..%2F..%2Fx"])
+  assert.equal((await relay(p)).status, 404, p);
+step(`CLI download relay (${archive.length} bytes, checksum ok; other paths 404)`);
+
 const storageCfg = {
   name: "local",
   provider: "rustfs",
