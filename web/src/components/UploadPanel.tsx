@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { Button, Dialog, Meter, cn } from "@cloudflare/kumo";
 import { CaretDownIcon, CaretUpIcon, CheckCircleIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
 import { useI18n } from "@/i18n";
-import { uploads, type UploadItem } from "@/lib/upload";
+import { uploads, type UploadItem, type UploadManager } from "@/lib/upload";
 import { formatBytes } from "@/lib/format";
 
 interface PendingConfirm {
@@ -58,7 +58,7 @@ export function UploadPanel() {
           {!collapsed && (
             <ul className="max-h-80 divide-y divide-kumo-hairline overflow-y-auto">
               {items.map((it) => (
-                <UploadRow key={it.id} item={it} />
+                <UploadRow key={it.id} item={it} manager={uploads} />
               ))}
             </ul>
           )}
@@ -85,7 +85,8 @@ export function UploadPanel() {
   );
 }
 
-function UploadRow({ item }: { item: UploadItem }) {
+/** One upload with its progress; `subtitle` replaces the project name under the file name. */
+export function UploadRow({ item, manager, subtitle }: { item: UploadItem; manager: UploadManager; subtitle?: string }) {
   const { t, errMsg } = useI18n();
   const pct = item.total ? Math.floor((item.loaded / item.total) * 100) : 100;
   const running = item.status === "uploading" || item.status === "completing" || item.status === "queued";
@@ -106,7 +107,7 @@ function UploadRow({ item }: { item: UploadItem }) {
             {item.name}
           </span>
         </div>
-        <div className="mt-0.5 truncate text-xs text-kumo-subtle">{item.projectName}</div>
+        {subtitle !== "" && <div className="mt-0.5 truncate text-xs text-kumo-subtle">{subtitle ?? item.projectName}</div>}
         {running && (
           <Meter label={statusText} value={pct} customValue={`${pct}%`} className="mt-2" />
         )}
@@ -123,7 +124,7 @@ function UploadRow({ item }: { item: UploadItem }) {
           shape="square"
           icon={XIcon}
           aria-label={t("upload.cancel")}
-          onClick={() => uploads.cancel(item.id)}
+          onClick={() => manager.cancel(item.id)}
         />
       )}
     </li>

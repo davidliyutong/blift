@@ -10,7 +10,8 @@ curl -fsSL https://<你的 blift 服务器>/install.sh | sh
 ```
 
 安装与该服务器版本一致的 CLI：经服务器中转 GitHub Release 下载（失败时直连 GitHub），校验 SHA-256。可选环境变量：
-`BLIFT_INSTALL_DIR`（安装目录，默认 `~/.local/bin`）、`BLIFT_VERSION`（指定版本）、`BLIFT_DOWNLOAD_URL`（只从该镜像下载）。
+`BLIFT_INSTALL_DIR`（安装目录，默认 `~/.local/bin`）、`BLIFT_VERSION`（指定版本）、`BLIFT_DOWNLOAD_URL`（只从该镜像下载）、
+`BLIFT_API_KEY`（装完后用这个 API key 登录，适合无人值守部署：`curl -fsSL https://<服务器>/install.sh | BLIFT_API_KEY=bliftk_… sh`）。
 
 ## 构建与测试
 
@@ -23,7 +24,7 @@ go test ./... && go vet ./...
 ## 配置
 
 - 配置文件：`$XDG_CONFIG_HOME/blift/config.json`（默认 `~/.config/blift/config.json`，权限 0600），保存 `server`、`token`、`user`。
-- 环境变量：`BLIFT_SERVER`、`BLIFT_TOKEN`、`BLIFT_LANG`（`zh` / `en`）。
+- 环境变量：`BLIFT_SERVER`、`BLIFT_TOKEN`、`BLIFT_LANG`（`zh` / `en`）；`BLIFT_API_KEY` 只用于 `blift login`。
 - 全局参数：`--server URL`、`--lang zh|en`、`--json`（输出原始 JSON）、`-q/--quiet`。
 - 语言优先级：`--lang` > `BLIFT_LANG` > `LC_ALL` / `LC_MESSAGES` / `LANG`（以 `zh` 开头即中文）> 英文。
 - 保存的令牌只会发给签发它的服务器；`BLIFT_TOKEN` 总是优先。
@@ -32,7 +33,7 @@ go test ./... && go vet ./...
 
 | 命令 | 说明 |
 | --- | --- |
-| `blift login [--server URL] [--no-browser] [--token T]` | 浏览器设备码授权登录，或直接使用令牌 |
+| `blift login [--server URL] [--no-browser] [--token T \| --api-key K]` | 浏览器设备码授权登录；或用 API key（网页「账户设置 → API keys」创建，默认读 `BLIFT_API_KEY`）换取会话；或直接使用令牌 |
 | `blift logout` / `whoami` / `version` | 退出、查看当前用户、版本 |
 | `blift project ls\|create\|info\|rm\|rename\|members\|add-member\|rm-member` | 项目管理（别名 `projects`、`p`） |
 | `blift ls <项目> [--sort name\|size\|time] [--query 文本] [-n 100] [-a]` | 列出文件（默认最多 100 个，`-n/--limit` 调整，`-a/--all` 全部） |

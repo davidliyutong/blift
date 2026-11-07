@@ -106,6 +106,11 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
   );
   await drain(
     expire,
+    `DELETE FROM api_keys WHERE id IN (SELECT id FROM api_keys WHERE expires_at IS NOT NULL AND expires_at < ? LIMIT ${WRITE_BATCH})`,
+    t - 7 * 86_400_000,
+  );
+  await drain(
+    expire,
     `DELETE FROM stats_daily WHERE rowid IN (SELECT rowid FROM stats_daily WHERE day < ? LIMIT ${WRITE_BATCH})`,
     day(t - 400 * 86_400_000),
   );

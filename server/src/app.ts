@@ -9,6 +9,7 @@ import admin from "./routes/admin";
 import auth from "./routes/auth";
 import { blobs, projectBlobs } from "./routes/blobs";
 import cli from "./routes/cli";
+import { inbox } from "./routes/inbox";
 import meta from "./routes/meta";
 import oidc from "./routes/oidc";
 import projects from "./routes/projects";
@@ -57,6 +58,7 @@ export function createApp() {
   app.route("/uploads", uploads);
   app.route("/shares", shares);
   app.route("/public/shares", publicShares);
+  app.route("/public/inbox", inbox);
   app.route("/admin", admin);
 
   app.notFound((c) => c.json({ error: { code: "not_found", message: "route not found" } }, 404));

@@ -9,13 +9,13 @@ import { migrate } from "../src/db/migrations";
 import { NodeD1 } from "../src/db/node-sqlite";
 import { decrypt, encrypt, hashPassword, verifyPassword } from "../src/lib/crypto";
 import { blobName, projectName } from "../src/lib/http";
-import { newId, newShareToken, newToken, newUserCode } from "../src/lib/ids";
+import { newApiKey, newId, newShareToken, newToken, newUserCode } from "../src/lib/ids";
 import { installScript } from "../src/lib/install";
 import { contentDisposition, S3 } from "../src/lib/s3";
 import { runGc, WRITE_BATCH } from "../src/services/gc";
 import { BLOB_SORTS, listBlobs } from "../src/services/projects";
 import { base32Decode, base32Encode, totpCode, verifyTotp } from "../src/lib/totp";
-import { partSizeFor } from "../src/routes/uploads";
+import { freeName, partSizeFor } from "../src/routes/uploads";
 
 describe("totp", () => {
   it("matches the RFC 6238 SHA-1 test vector", async () => {
@@ -55,6 +55,7 @@ describe("ids", () => {
   it("have the documented shapes", () => {
     expect(newId()).toMatch(/^[a-z2-7]{16}$/);
     expect(newToken()).toMatch(/^blift_[0-9A-Za-z]{32}$/);
+    expect(newApiKey()).toMatch(/^bliftk_[0-9A-Za-z]{32}$/);
     expect(newShareToken()).toMatch(/^[0-9A-Za-z]{12}$/);
     expect(newUserCode()).toMatch(/^[B-Z]{4}-[B-Z]{4}$/);
   });
@@ -99,6 +100,30 @@ describe("uploads", () => {
     const ps = partSizeFor(huge);
     expect(ps % MiB).toBe(0);
     expect(Math.ceil(huge / ps)).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe("freeName", () => {
+  // Inbox uploads never replace a file: a taken name gets the next free " (n)" suffix.
+  it("numbers taken names before the extension", async () => {
+    const db = new NodeD1(":memory:");
+    await migrate(db);
+    const add = (name: string, status = "active") =>
+      db
+        .prepare("INSERT INTO blobs (id, project_id, storage_id, object_key, name, size, content_type, status, created_at, updated_at) VALUES (?, 'p', 's', ?, ?, 1, 'x', ?, 1, 1)")
+        .bind(newId(), newId(), name, status);
+    await db.batch([add("a.txt"), add("a (1).txt"), add("a (2).txt", "deleted"), add(".env"), add("README")]);
+    expect(await freeName(db, "p", "new.txt")).toBe("new.txt");
+    expect(await freeName(db, "p", "a.txt")).toBe("a (2).txt");
+    expect(await freeName(db, "q", "a.txt")).toBe("a.txt");
+    expect(await freeName(db, "p", ".env")).toBe(".env (1)");
+    expect(await freeName(db, "p", "README")).toBe("README (1)");
+    const long = `${"x".repeat(251)}.bin`;
+    await db.batch([add(long)]);
+    const renamed = await freeName(db, "p", long);
+    expect(renamed).toMatch(/^x+ \(1\)\.bin$/);
+    expect(renamed.length).toBeLessThanOrEqual(255);
+    db.close();
   });
 });
 
@@ -259,7 +284,10 @@ describe("install.sh", () => {
         for (const arch of ["amd64", "arm64"]) {
           const name = `blift_9.8.7_${os}_${arch}`;
           mkdirSync(join(root, "pkg", name), { recursive: true });
-          writeFileSync(join(root, "pkg", name, "blift"), "#!/bin/sh\necho 'blift v9.8.7 (test)'\n", { mode: 0o755 });
+          // `version` prints the version; `login` records how it was called (the key must come
+          // from the environment, not the command line).
+          const fake = `#!/bin/sh\ncase $1 in login) echo "login $* key=$BLIFT_API_KEY" ;; *) echo 'blift v9.8.7 (test)' ;; esac\n`;
+          writeFileSync(join(root, "pkg", name, "blift"), fake, { mode: 0o755 });
           execFileSync("tar", ["-C", join(root, "pkg"), "-czf", join(rel, `${name}.tar.gz`), name]);
           sums.push(`${createHash("sha256").update(readFileSync(join(rel, `${name}.tar.gz`))).digest("hex")}  ${name}.tar.gz`);
         }
@@ -293,7 +321,13 @@ describe("install.sh", () => {
       expect(fallback.out).toContain(`无法从 ${odd}/api/cli/download 下载`);
       expect(fallback.out).toContain(`blift login --server ${odd}`);
 
-      // 3. A tampered archive is refused.
+      // 3. BLIFT_API_KEY signs in right after installing, without the key on the command line.
+      const withKey = run(installScript(server, "9.8.7", `file://${root}/no-github`), { BLIFT_API_KEY: "bliftk_test" });
+      expect(withKey.status, withKey.err).toBe(0);
+      expect(withKey.out).toContain(`login login --server ${server} --no-browser key=bliftk_test`);
+      expect(withKey.out).not.toContain(`blift login --server`);
+
+      // 4. A tampered archive is refused.
       writeFileSync(join(rel, "SHA256SUMS"), sums.map((l) => "0".repeat(64) + l.slice(64)).join("\n"));
       const bad = run(installScript(server, "9.8.7"), { LANG: "C" });
       expect(bad.status).not.toBe(0);

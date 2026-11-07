@@ -161,6 +161,7 @@ r.delete("/users/:id", async (c) => {
     stmt(db, "DELETE FROM shares WHERE creator_id = ?", id),
     stmt(db, "DELETE FROM project_members WHERE user_id = ?", id),
     stmt(db, "DELETE FROM sessions WHERE user_id = ?", id),
+    stmt(db, "DELETE FROM api_keys WHERE user_id = ?", id),
     stmt(db, "DELETE FROM cli_logins WHERE user_id = ?", id),
     stmt(db, "DELETE FROM users WHERE id = ?", id),
   ]);
@@ -180,7 +181,7 @@ r.get("/projects", async (c) => {
     all<ProjectRow>(c.env.DB, `${PROJECT_SELECT} WHERE ${where} ORDER BY p.used_bytes DESC LIMIT ? OFFSET ?`, uid, ...args, limit, offset),
     one<{ n: number }>(c.env.DB, `SELECT COUNT(*) AS n FROM projects p LEFT JOIN users o ON o.id = p.owner_id WHERE ${where}`, ...args),
   ]);
-  return c.json({ projects: rows.map((p) => toProject({ ...p, role: p.role ?? "owner" })), total: total?.n ?? 0 });
+  return c.json({ projects: rows.map((p) => toProject(c, { ...p, role: p.role ?? "owner" })), total: total?.n ?? 0 });
 });
 
 // ---- Storage backends

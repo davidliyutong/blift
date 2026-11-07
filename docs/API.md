@@ -30,6 +30,7 @@ and the CLI (`cli/`). Change it together with the code.
 | `account_disabled` | 403 | user disabled by admin |
 | `quota_exceeded` | 403 | upload would exceed user quota |
 | `invalid_secret` | 403 | wrong bootstrap secret |
+| `invalid_api_key` | 401 | API key unknown, expired or used up (`/api/cli/login/api-key`) |
 | `invalid_password` | 403 | wrong share password |
 | `not_found` | 404 | resource not found (or not visible) |
 | `conflict` | 409 | generic conflict |
@@ -68,6 +69,8 @@ type Project = {
   role: "owner" | "editor" | "viewer";   // caller's role
   storage_id: string; storage_name: string;
   used_bytes: number; blob_count: number;
+  inbox_enabled: boolean;                // accepts anonymous uploads (see "Inbox")
+  inbox_url: string | null;              // <public origin>/i/<token>; only for editors and owners
   created_at: number; updated_at: number;
 };
 
@@ -75,6 +78,7 @@ type Blob = {
   id: string; project_id: string; name: string; size: number;
   content_type: string;                  // "application/octet-stream" if unknown
   uploader: UserRef | null;
+  via_inbox: boolean;                    // uploaded anonymously through the project inbox
   download_count: number;
   created_at: number; updated_at: number;
 };
@@ -126,12 +130,40 @@ Errors: `setup_done`, `invalid_secret`, `not_configured` (server has no `BOOTSTR
 | POST | `/api/auth/totp/enable` | `{code}` | 204 |
 | POST | `/api/auth/totp/disable` | `{code}` | 204 |
 | POST | `/api/auth/password` | `{current_password?, new_password}` | 204 |
-| GET | `/api/auth/sessions` | – | `{sessions: [{id, kind: "web"\|"cli", name, created_at, last_used_at, expires_at, current}]}` |
+| GET | `/api/auth/sessions` | – | `{sessions: [{id, kind: "web"\|"cli", name, created_at, last_used_at, expires_at, current, api_key_name}]}` (`expires_at` null = until revoked) |
 | DELETE | `/api/auth/sessions/:id` | – | 204 |
+| GET | `/api/auth/api-keys` | – | `{api_keys: ApiKey[]}` |
+| POST | `/api/auth/api-keys` | `{name, max_uses?, expires_in?, session_ttl?}` | `ApiKey & {key}` (201) |
+| DELETE | `/api/auth/api-keys/:id?revoke_sessions=1` | – | 204 |
 
 A session whose user has TOTP enabled starts in *pending MFA* state (both local password
 login and OIDC login). While pending, every endpoint except `/api/auth/mfa`, `/api/auth/me`
 and `/api/auth/logout` returns `401 mfa_required`.
+
+**API keys** let the CLI sign in without a browser (servers, scripts): `blift login --api-key`
+or `BLIFT_API_KEY`, and `install.sh` (see below). Each use creates a CLI session that lasts
+`session_ttl` (by default 90 days, like a device-flow login, or until revoked); the key is only a
+way to obtain one.
+
+```ts
+type ApiKey = {
+  id: string; name: string;
+  prefix: string;                 // first characters of the key, e.g. "bliftk_AbCd"
+  max_uses: number | null;        // null = unlimited; 1 = single use
+  use_count: number;
+  expires_at: number | null;      // the key itself; null = never
+  session_ttl: number | null;     // seconds each session it creates lasts; null = until revoked
+  last_used_at: number | null; created_at: number;
+  session_count: number;          // active CLI sessions created with this key
+};
+```
+Keys look like `bliftk_<32 base62 chars>`. Only their SHA-256 is stored: `key` is returned once, by
+the POST. `max_uses` 1–1 000 000 or null, `expires_in` seconds (60 s – 10 years) or null,
+`session_ttl` seconds (1 day – 10 years), null for sessions that never expire (they end when they
+are signed out, with `revoke_sessions=1`, a password change or when the user is disabled), or
+omitted for 90 days. A key
+does not need a second factor (the user created it while signed in). `revoke_sessions=1` also
+signs out the CLI sessions created with the key. Expired keys are removed by GC after 7 days.
 
 OIDC: users are auto-registered on first login (matched by `sub`). ID tokens signed with
 **HS256** (key = client secret) and **RS256/ES256** (JWKS) are accepted. If the admin sets
@@ -144,6 +176,8 @@ OIDC: users are auto-registered on first login (matched by `sub`). ID tokens sig
 version (verified against `SHA256SUMS`) and prints `blift login --server <public origin>`.
 It downloads through the relay below and falls back to GitHub Releases directly.
 Client-side overrides: `BLIFT_VERSION`, `BLIFT_INSTALL_DIR`, `BLIFT_DOWNLOAD_URL` (only this mirror).
+With `BLIFT_API_KEY` set (`curl -fsSL https://host/install.sh | BLIFT_API_KEY=bliftk_… sh`) it signs
+in right away (`blift login` with the key in its environment) and fails if that does not work.
 
 `GET /api/cli/latest` (no auth) → `{ "version": "0.1.1" }`, the latest published release (from
 GitHub, kept for an hour; `502 upstream_error` if GitHub cannot be reached). `blift update` uses it.
@@ -168,6 +202,11 @@ unreachable → `502 upstream_error`. Responses are `immutable`; Workers keep th
    - denied → `400 access_denied`; expired → `400 expired_token`
    - approved → `200 { "token": "blift_…", "user": User }` (one time; the token is a 90-day CLI session)
 
+**With an API key** (no browser): `POST /api/cli/login/api-key` (no auth) body
+`{ "api_key": "bliftk_…", "client_name": "blift-cli on build-01" }` → `200 { "token", "user" }`, like
+an approved poll; the session lasts the key's `session_ttl`. Each call counts one use of the key. Errors: `invalid_api_key` (unknown, expired
+or used up), `account_disabled`.
+
 Web-side (authenticated):
 - `GET /api/cli/login/:user_code` → `{ user_code, client_name, status, created_at, expires_at }`
 - `POST /api/cli/login/:user_code/approve` → 204
@@ -184,7 +223,8 @@ Web-side (authenticated):
 | GET | `/api/projects` | – | `{projects: Project[]}` (all projects the caller is a member of) |
 | POST | `/api/projects` | `{name, description?, storage_id?}` | `Project` (201) |
 | GET | `/api/projects/:id` | – | `Project` |
-| PATCH | `/api/projects/:id` | `{name?, description?}` | `Project` (owner) |
+| PATCH | `/api/projects/:id` | `{name?, description?, inbox_enabled?}` | `Project` (owner) |
+| POST | `/api/projects/:id/inbox/reset` | – | `Project` (owner; new inbox link, 409 `conflict` while disabled) |
 | DELETE | `/api/projects/:id` | – | 204 (owner or admin; objects are removed asynchronously by GC) |
 | GET | `/api/projects/:id/members` | – | `{members: [{user: UserRef & {email}, role, created_at}]}` |
 | POST | `/api/projects/:id/members` | `{user: "<username or email>", role: "editor"\|"viewer"}` | member (owner) |
@@ -276,6 +316,28 @@ Presigned URLs are valid for 6 hours.
 as `?cursor=`. `file_count` / `total_bytes` describe the whole share. For password-protected shares pass the access token with
 header `X-Share-Access: <token>` or query `?access_token=` (the unlock call also sets an
 HttpOnly cookie for browsers). Errors: `not_found`, `share_expired`, `share_exhausted`, `invalid_password`.
+
+## Inbox (anonymous uploads, no login)
+
+An owner can let anyone with a link upload into a project: `PATCH /api/projects/:id`
+`{inbox_enabled: true}` (default off). The link is `Project.inbox_url` = `<public origin>/i/<token>`
+(the web page); `false` disables it, and enabling again or `POST …/inbox/reset` issues a new token.
+Uploaders cannot list, download or replace anything. A name that is taken becomes
+`name (1).ext`, `name (2).ext`, … when the upload completes. Usage, quota and traffic stats are
+charged to the project owner. Files show up with `uploader: null, via_inbox: true`.
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| GET | `/api/public/inbox/:token` | – | `{inbox: {name, description, owner}}` (`owner` = display name) |
+| POST | `/api/public/inbox/:token/uploads` | `{name, size, content_type?}` | upload init + `upload_token` (201) |
+| POST | `/api/public/inbox/:token/uploads/:blob_id/parts` | `{part_numbers}` | `{urls, expires_at}` |
+| POST | `/api/public/inbox/:token/uploads/:blob_id/complete` | `{parts?}` | `{name, size}` (`name` = final name) |
+| DELETE | `/api/public/inbox/:token/uploads/:blob_id` | – | 204 |
+
+The upload flow is the one in **Uploads** (same modes, part sizes and presigned S3 URLs). The
+calls after init must send the `upload_token` from the init response as header
+`X-Upload-Token: <token>` (valid 6 h, for that upload only). Errors: `not_found` (unknown or
+disabled inbox, or a wrong upload token), `quota_exceeded` (owner's quota).
 
 ## Admin (role = admin)
 

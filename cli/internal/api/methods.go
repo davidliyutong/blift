@@ -29,6 +29,12 @@ func (c *Client) StartCLILogin(ctx context.Context, clientName string) (*CLILogi
 	return &r, c.do(ctx, http.MethodPost, "/api/cli/login", map[string]string{"client_name": clientName}, &r)
 }
 
+// LoginWithAPIKey exchanges an API key (Account → API keys) for a CLI session token.
+func (c *Client) LoginWithAPIKey(ctx context.Context, key, clientName string) (*LoginResult, error) {
+	var r LoginResult
+	return &r, c.do(ctx, http.MethodPost, "/api/cli/login/api-key", map[string]string{"api_key": key, "client_name": clientName}, &r)
+}
+
 // WaitCLILogin polls the device-flow endpoint every interval until the request is
 // approved, denied or older than timeout (0 = no client-side timeout).
 func (c *Client) WaitCLILogin(ctx context.Context, deviceCode string, interval, timeout time.Duration) (*LoginResult, error) {

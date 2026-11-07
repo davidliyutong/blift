@@ -24,11 +24,12 @@ AWS S3、RustFS、MinIO……）为后端。它原生运行在 **Cloudflare Work
 - **直传**：≤ 64 MiB 的文件单次预签名 `PUT`，更大的自动分片并行上传（单片失败单独重试）；CLI 分段并行下载。
 - **任意 S3 兼容存储**：可同时配置多个后端，按项目选择；管理页「应用 CORS」一键配置存储桶。
 - **分享**：单个文件或整个项目的公开链接，可设访问密码、有效期、下载次数上限；接收方无需账号。
+- **收件箱**：项目可开启匿名上传链接（默认关闭）：上传者无需账号，看不到项目里的任何文件；重名时自动编号，不会覆盖。
 - **单点登录**：OIDC + PKCE，优先适配 Authentik；ID Token 支持 HS256 / RS256 / ES256；首次登录自动注册，
   可按 IdP 用户组授予管理员。
 - **安全**：TOTP 两步验证；一次性 bootstrap secret 创建首个管理员；会话令牌只存哈希；存储与 IdP 凭据加密保存。
 - **管理**：仪表盘查看用量、请求数、流量；用户管理与配额调整；在线配置存储后端与 SSO。
-- **CLI**：浏览器设备码授权登录；项目与成员管理、并行上传下载、分享，免登录下载加密分享；
+- **CLI**：浏览器设备码授权登录，或用 API key 无人值守部署；项目与成员管理、并行上传下载、分享，免登录下载加密分享；
   Linux / macOS × amd64 / arm64 静态单文件。
 - **垃圾回收**：未完成的上传、已删除的文件与项目、过期的会话与分享定时清理，并遵守 Cloudflare 子请求限制。
 - Web 与 CLI 均支持**中文 / English**，浅色 / 深色主题。
@@ -166,6 +167,17 @@ curl -fsSL https://files.example.com/install.sh | sh
 的机器也能安装；中转失败时（例如服务端本身不能上外网）改为直连 GitHub。下载后按 `SHA256SUMS` 校验，
 安装到当前用户的 `~/.local/bin`（无需 sudo），如果它不在 `PATH` 中会给出加入的命令。可用 `BLIFT_INSTALL_DIR`、
 `BLIFT_VERSION`、`BLIFT_DOWNLOAD_URL`（只从这个 Release 文件镜像下载）修改默认值。Web 界面「账户设置」里会显示适用于当前服务器的命令。
+
+没有浏览器的机器（服务器、CI、自动化部署脚本）可以在「账户设置 → API keys」创建一个 **API key**
+（一次性或限定次数，可设有效期），交给安装脚本，装完立即登录：
+
+```sh
+curl -fsSL https://files.example.com/install.sh | BLIFT_API_KEY=bliftk_… sh
+```
+
+已安装的 CLI 用 `blift login --api-key bliftk_…`（或 `BLIFT_API_KEY=… blift login`）。每使用一次都会在
+「账户设置 → 会话」中产生一个 CLI 会话，有效期由 key 的「登录有效期」决定：7～365 天（默认 90 天）或直到撤销；
+删除 key 时可以一并注销这些会话。
 
 也可以从[最新 Release](https://github.com/davidliyutong/blift/releases/latest) 手动下载对应平台的压缩包：
 

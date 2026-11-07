@@ -61,6 +61,8 @@ func lsCmd() *cobra.Command {
 				uploader := "-"
 				if b.Uploader != nil {
 					uploader = b.Uploader.Username
+				} else if b.ViaInbox {
+					uploader = i18n.T("inbox.uploader")
 				}
 				rows = append(rows, []string{b.Name, ui.Size(b.Size), ui.Time(b.CreatedAt), uploader, b.ID})
 				size += b.Size

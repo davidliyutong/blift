@@ -1,4 +1,4 @@
-import { api, ApiError, type Blob as BlobInfo } from "@/api";
+import { api, ApiError, type UploadInit } from "@/api";
 
 export type UploadStatus = "queued" | "uploading" | "completing" | "done" | "failed" | "canceled";
 
@@ -16,7 +16,46 @@ export interface UploadItem {
 }
 
 type ConfirmOverwrite = (name: string) => Promise<boolean>;
-type DoneListener = (projectId: string, blob: BlobInfo) => void;
+type DoneListener = (projectId: string) => void;
+
+/** Where a queue sends its API calls: a project (signed in) or a project inbox (anonymous). */
+export interface UploadApi {
+  init(projectId: string, body: { name: string; size: number; content_type: string; overwrite?: boolean }): Promise<UploadInit>;
+  parts(blobId: string, partNumbers: number[]): Promise<{ urls: Record<string, string> }>;
+  /** Resolves to the file's final name (inbox uploads get a free name instead of replacing). */
+  complete(blobId: string): Promise<{ name: string }>;
+  abort(blobId: string): Promise<void>;
+}
+
+const projectApi: UploadApi = {
+  init: api.uploads.init,
+  parts: api.uploads.parts,
+  complete: api.uploads.complete,
+  abort: api.uploads.abort,
+};
+
+/** Uploads into a project inbox; each upload carries its own upload token. */
+export function inboxApi(token: string): UploadApi {
+  const tokens = new Map<string, string>();
+  const tok = (blobId: string) => tokens.get(blobId) ?? "";
+  return {
+    init: async (_projectId, body) => {
+      const r = await api.inbox.init(token, body);
+      tokens.set(r.blob_id, r.upload_token);
+      return r;
+    },
+    parts: (blobId, nums) => api.inbox.parts(token, blobId, tok(blobId), nums),
+    complete: async (blobId) => {
+      const r = await api.inbox.complete(token, blobId, tok(blobId));
+      tokens.delete(blobId);
+      return r;
+    },
+    abort: async (blobId) => {
+      await api.inbox.abort(token, blobId, tok(blobId));
+      tokens.delete(blobId);
+    },
+  };
+}
 
 const FILE_CONCURRENCY = 2;
 const PART_CONCURRENCY = 4;
@@ -25,14 +64,16 @@ const MAX_RETRIES = 3;
 
 class Canceled extends Error {}
 
-/** Upload queue shared by the whole SPA, so uploads survive in-app navigation. */
-class UploadManager {
+/** An upload queue. The SPA shares one (`uploads`), so uploads survive in-app navigation. */
+export class UploadManager {
   private items: UploadItem[] = [];
   private listeners = new Set<() => void>();
   private doneListeners = new Set<DoneListener>();
   private controllers = new Map<string, AbortController>();
   private running = 0;
   confirmOverwrite: ConfirmOverwrite = async () => false;
+
+  constructor(private readonly api: UploadApi = projectApi) {}
 
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
@@ -105,11 +146,11 @@ class UploadManager {
       const body = { name: item.name, size: item.file.size, content_type: contentType };
       let init;
       try {
-        init = await api.uploads.init(item.projectId, body);
+        init = await this.api.init(item.projectId, body);
       } catch (e) {
         if (!(e instanceof ApiError && e.code === "name_taken")) throw e;
         if (!(await this.confirmOverwrite(item.name))) throw new Canceled();
-        init = await api.uploads.init(item.projectId, { ...body, overwrite: true });
+        init = await this.api.init(item.projectId, { ...body, overwrite: true });
       }
       blobId = init.blob_id;
       this.patch(item.id, { blobId });
@@ -122,13 +163,13 @@ class UploadManager {
       }
 
       this.patch(item.id, { status: "completing", loaded: item.total });
-      const blob = await api.uploads.complete(blobId);
-      this.patch(item.id, { status: "done" });
-      this.doneListeners.forEach((fn) => fn(item.projectId, blob));
+      const { name } = await this.api.complete(blobId);
+      this.patch(item.id, { status: "done", name });
+      this.doneListeners.forEach((fn) => fn(item.projectId));
     } catch (e) {
       const canceled = e instanceof Canceled || ctrl.signal.aborted;
       this.patch(item.id, canceled ? { status: "canceled" } : { status: "failed", error: e });
-      if (blobId) api.uploads.abort(blobId).catch(() => undefined);
+      if (blobId) this.api.abort(blobId).catch(() => undefined);
     } finally {
       this.controllers.delete(item.id);
     }
@@ -145,7 +186,7 @@ class UploadManager {
         if (!fetching) {
           const from = n;
           const nums = Array.from({ length: Math.min(PART_URL_BATCH, partCount - from + 1) }, (_, i) => from + i);
-          fetching = api.uploads
+          fetching = this.api
             .parts(blobId, nums)
             .then((r) => {
               for (const [k, v] of Object.entries(r.urls)) urls.set(Number(k), v);

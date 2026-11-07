@@ -3,7 +3,7 @@ import { all, chunks, now, one, placeholders, stmt, type DB, type Stmt } from ".
 import type { Ctx } from "../env";
 import { b64decode, b64encode } from "../lib/crypto";
 import { badRequest, forbidden, notFound } from "../lib/errors";
-import { likeArg } from "../lib/http";
+import { likeArg, publicOrigin } from "../lib/http";
 import { userRef } from "./users";
 
 export type MemberRole = "owner" | "editor" | "viewer";
@@ -18,6 +18,8 @@ export type ProjectRow = {
   used_bytes: number;
   blob_count: number;
   status: "active" | "deleting";
+  /** Set while the inbox (anonymous uploads at /i/<token>) is enabled. */
+  inbox_token: string | null;
   created_at: number;
   updated_at: number;
   owner_username: string | null;
@@ -34,7 +36,8 @@ export const PROJECT_SELECT = `
   LEFT JOIN users o ON o.id = p.owner_id
   LEFT JOIN storages st ON st.id = p.storage_id`;
 
-export function toProject(p: ProjectRow) {
+/** The inbox link is shown to members who may upload anyway (editors and owners). */
+export function toProject(c: Ctx, p: ProjectRow) {
   return {
     id: p.id,
     name: p.name,
@@ -45,6 +48,8 @@ export function toProject(p: ProjectRow) {
     storage_name: p.storage_name ?? "",
     used_bytes: p.used_bytes,
     blob_count: p.blob_count,
+    inbox_enabled: !!p.inbox_token,
+    inbox_url: p.inbox_token && RANK[p.role] >= RANK.editor ? `${publicOrigin(c)}/i/${p.inbox_token}` : null,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };
@@ -117,6 +122,8 @@ export type BlobRow = {
   part_size: number | null;
   overwrite: number;
   uploader_id: string | null;
+  /** Uploaded anonymously through the project's inbox. */
+  via_inbox: number;
   download_count: number;
   created_at: number;
   updated_at: number;
@@ -138,6 +145,7 @@ export function toBlob(b: BlobRow) {
     size: b.size,
     content_type: b.content_type,
     uploader: userRef(b.uploader_id, b.uploader_username ?? null, b.uploader_display_name ?? null),
+    via_inbox: !!b.via_inbox,
     download_count: b.download_count,
     created_at: b.created_at,
     updated_at: b.updated_at,

@@ -5,7 +5,10 @@
 // POSIX sh, so `| sh` and `| bash` both work. It installs the CLI release matching this server's
 // version, downloaded through this server (GET /api/cli/download relays GitHub Releases, so clients
 // that cannot reach GitHub still get it) or else from GitHub directly, checks it against SHA256SUMS
-// and prints the login command for this server. The script lives in a template literal: shell `${…}` is written `\${…}` and `\n` as `\\n`;
+// and prints the login command for this server, or signs in right away with BLIFT_API_KEY:
+//
+//   curl -fsSL https://files.example.com/install.sh | BLIFT_API_KEY=bliftk_… sh
+// The script lives in a template literal: shell `${…}` is written `\${…}` and `\n` as `\\n`;
 // test/unit.test.ts runs the rendered script end to end.
 
 export const RELEASES = "https://github.com/davidliyutong/blift/releases";
@@ -24,6 +27,8 @@ export function installScript(server: string, version: string, github = RELEASE_
 # Installs blift v${version} (the version this server runs), downloading it through this server
 # (which relays GitHub Releases) or else from GitHub directly, verifies its SHA-256 and prints the
 # login command. Optional environment:
+#   BLIFT_API_KEY       sign in with this API key (Account → API keys) right after installing:
+#                       curl -fsSL ${shown}/install.sh | BLIFT_API_KEY=bliftk_… sh
 #   BLIFT_VERSION       install another release, e.g. BLIFT_VERSION=0.1.0
 #   BLIFT_INSTALL_DIR   target directory (default: ~/.local/bin, so no sudo is needed)
 #   BLIFT_DOWNLOAD_URL  download only from this mirror of ${github}
@@ -130,8 +135,14 @@ main() {
     say "note: $(command -v blift) comes first on your PATH" "注意：PATH 中优先的是 $(command -v blift)"
   fi
   echo
-  say "Sign in to $SERVER:" "登录 \${SERVER}："
-  printf '  blift login --server %s\\n' "$SERVER"
+  if [ -n "\${BLIFT_API_KEY:-}" ]; then
+    # The key stays in the environment, never on a command line (visible in ps).
+    BLIFT_API_KEY=$BLIFT_API_KEY "$dir/blift" login --server "$SERVER" --no-browser ||
+      die "could not sign in to $SERVER with BLIFT_API_KEY" "无法用 BLIFT_API_KEY 登录 \${SERVER}"
+  else
+    say "Sign in to $SERVER:" "登录 \${SERVER}："
+    printf '  blift login --server %s\\n' "$SERVER"
+  fi
 }
 
 main "$@"

@@ -224,7 +224,7 @@ export function FilesTab({ project, onChanged }: { project: Project; onChanged: 
                       </a>
                     </Table.Cell>
                     <Table.Cell className="text-right whitespace-nowrap tabular-nums">{formatBytes(b.size)}</Table.Cell>
-                    <Table.Cell className="hidden text-kumo-subtle lg:table-cell">{displayName(b.uploader)}</Table.Cell>
+                    <Table.Cell className="hidden text-kumo-subtle lg:table-cell">{b.via_inbox ? t("inbox.uploader") : displayName(b.uploader)}</Table.Cell>
                     <Table.Cell className="whitespace-nowrap text-kumo-subtle" title={formatDate(b.created_at, lang)}>
                       {formatRelative(b.created_at, lang)}
                     </Table.Cell>

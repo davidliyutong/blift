@@ -29,13 +29,15 @@ and bookkeeping.
   configures the bucket from the admin UI.
 - **Sharing.** Public links for a single file or a whole project, with optional password,
   expiry and download limit; recipients need no account.
+- **Inbox.** A project can take anonymous uploads through a link (off by default): senders need no
+  account and see nothing in the project; a name that is taken gets a number instead of replacing.
 - **Single sign-on.** OIDC with PKCE, tuned for Authentik; HS256, RS256 and ES256 ID tokens;
   users are created on first sign-in and an IdP group can grant the admin role.
 - **Security.** TOTP two-factor authentication, one-off bootstrap secret for the first admin,
   session tokens stored hashed, storage and IdP credentials encrypted at rest.
 - **Administration.** Dashboard with usage, request and traffic charts; user management with
   per-user quotas; storage backends and SSO configured online.
-- **CLI.** Browser-based login (device flow), project and member management, parallel
+- **CLI.** Browser-based login (device flow) or API keys for unattended installs, project and member management, parallel
   uploads/downloads, share links, password-protected share downloads without an account.
   Static binaries for Linux and macOS on amd64 and arm64.
 - **Garbage collection.** Stale uploads, deleted files and projects, expired sessions and
@@ -190,6 +192,18 @@ It checks the archive against `SHA256SUMS` and installs to your own `~/.local/bi
 printing how to add it to `PATH` if needed. `BLIFT_INSTALL_DIR`, `BLIFT_VERSION` and
 `BLIFT_DOWNLOAD_URL` (download only from this mirror of the release files) change those defaults.
 Account settings in the web UI show the command for your server.
+
+To set up machines without a browser (servers, CI, provisioning scripts), create an **API key** under
+Account → API keys (single use or a number of uses, with an expiry) and pass it to the installer,
+which then signs in right away:
+
+```sh
+curl -fsSL https://files.example.com/install.sh | BLIFT_API_KEY=bliftk_… sh
+```
+
+`blift login --api-key bliftk_…` (or `BLIFT_API_KEY=… blift login`) does the same for an installed
+CLI. Every use creates a CLI session listed under Account → Sessions, valid for the key's sign-in
+lifetime: 7 to 365 days (90 by default) or until revoked; deleting the key can sign those out as well.
 
 Or download the archive for your platform from the
 [latest release](https://github.com/davidliyutong/blift/releases/latest) yourself:

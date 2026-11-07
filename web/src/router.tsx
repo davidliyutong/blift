@@ -12,6 +12,7 @@ import { SharesPage } from "@/pages/Shares";
 import { AccountPage } from "@/pages/Account";
 import { CliAuthorizePage } from "@/pages/CliAuthorize";
 import { PublicSharePage } from "@/pages/PublicShare";
+import { InboxPage } from "@/pages/Inbox";
 import { NotFoundPage } from "@/pages/NotFound";
 import { RouteError } from "@/pages/RouteError";
 
@@ -26,7 +27,7 @@ const AdminSettingsPage = lazy(() =>
 function Root() {
   const { info } = useSession();
   const { pathname } = useLocation();
-  if (info.setup_required && pathname !== "/setup" && !pathname.startsWith("/s/")) {
+  if (info.setup_required && pathname !== "/setup" && !pathname.startsWith("/s/") && !pathname.startsWith("/i/")) {
     return <Navigate to="/setup" replace />;
   }
   return (
@@ -66,6 +67,7 @@ export const router = createBrowserRouter([
       { path: "/setup", element: <SetupPage /> },
       { path: "/login", element: <LoginPage /> },
       { path: "/s/:token", element: <PublicSharePage /> },
+      { path: "/i/:token", element: <InboxPage /> },
       {
         path: "/cli",
         element: (
