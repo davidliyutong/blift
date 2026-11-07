@@ -10,7 +10,7 @@ curl -fsSL https://<你的 blift 服务器>/install.sh | sh
 ```
 
 安装与该服务器版本一致的 CLI（来自 GitHub Release，校验 SHA-256）。可选环境变量：
-`BLIFT_INSTALL_DIR`（安装目录）、`BLIFT_VERSION`（指定版本）、`BLIFT_DOWNLOAD_URL`（Release 下载镜像）。
+`BLIFT_INSTALL_DIR`（安装目录，默认 `~/.local/bin`）、`BLIFT_VERSION`（指定版本）、`BLIFT_DOWNLOAD_URL`（Release 下载镜像）。
 
 ## 构建与测试
 

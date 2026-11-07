@@ -137,14 +137,16 @@ describe("install.sh", () => {
         PATH: process.env.PATH,
         HOME: root,
         LANG: "zh_CN.UTF-8", // bash 3.2 would read "$x）" as one name: messages must use ${x}
+        SHELL: "/bin/zsh",
         BLIFT_DOWNLOAD_URL: `file://${join(root, "mirror")}`,
-        BLIFT_INSTALL_DIR: join(root, "bin"),
       };
       const ok = spawnSync(shell, [], { input: script, env });
       expect(ok.status, ok.stderr.toString()).toBe(0);
       const out = ok.stdout.toString();
       expect(out).toContain("blift v9.8.7 (test)");
-      expect(out).toContain("不在 PATH 中");
+      // Defaults to the user's own ~/.local/bin and tells how to put it on PATH.
+      expect(readFileSync(join(root, ".local", "bin", "blift"), "utf8")).toContain("v9.8.7");
+      expect(out).toContain(`echo 'export PATH="${join(root, ".local", "bin")}:$PATH"' >> ~/.zshrc`);
       expect(out).toContain(`blift login --server ${server}`);
 
       writeFileSync(join(rel, "SHA256SUMS"), sums.map((l) => "0".repeat(64) + l.slice(64)).join("\n"));

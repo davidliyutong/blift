@@ -22,8 +22,7 @@ export function installScript(server: string, version: string): string {
 # Installs blift v${version} (the version this server runs) from GitHub Releases, verifies its
 # SHA-256 and prints the login command. Optional environment:
 #   BLIFT_VERSION       install another release, e.g. BLIFT_VERSION=0.1.0
-#   BLIFT_INSTALL_DIR   target directory (default: /usr/local/bin, with sudo if needed;
-#                       ~/.local/bin when it is already on PATH or sudo is unavailable)
+#   BLIFT_INSTALL_DIR   target directory (default: ~/.local/bin, so no sudo is needed)
 #   BLIFT_DOWNLOAD_URL  release download base, for mirrors (default: ${DOWNLOADS})
 set -eu
 
@@ -93,29 +92,26 @@ main() {
   fi
   tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
 
-  sudo=
-  if [ -n "\${BLIFT_INSTALL_DIR:-}" ]; then
-    dir=$BLIFT_INSTALL_DIR
-  elif [ -w /usr/local/bin ] || [ "$(id -u)" = 0 ]; then
-    dir=/usr/local/bin
-  elif on_path "$HOME/.local/bin"; then
-    dir=$HOME/.local/bin
-  elif has sudo && (: </dev/tty) 2>/dev/null; then
-    dir=/usr/local/bin
-    sudo=sudo
-    say "Installing to $dir with sudo (BLIFT_INSTALL_DIR picks another directory)" "使用 sudo 安装到 \${dir}（可用 BLIFT_INSTALL_DIR 指定其他目录）"
-  else
-    dir=$HOME/.local/bin
-  fi
-  $sudo mkdir -p "$dir"
-  $sudo install -m 755 "$tmp/$name/blift" "$dir/blift"
+  # The user's own bin directory, never a global one.
+  dir=\${BLIFT_INSTALL_DIR:-$HOME/.local/bin}
+  mkdir -p "$dir"
+  install -m 755 "$tmp/$name/blift" "$dir/blift"
 
   installed=$("$dir/blift" version)
   say "✓ $installed → $dir/blift" "✓ $installed → $dir/blift"
   if ! on_path "$dir"; then
-    say "$dir is not on your PATH; add it to your shell profile:" "$dir 不在 PATH 中，请加入 shell 配置文件："
-    # shellcheck disable=SC2016 # a literal $PATH for the user to copy
-    printf '  export PATH="%s:$PATH"\\n' "$dir"
+    case \${SHELL:-} in
+      */zsh) rc=.zshrc ;;
+      */bash) if [ "$os" = darwin ]; then rc=.bash_profile; else rc=.bashrc; fi ;;
+      */fish) rc= ;;
+      *) rc=.profile ;;
+    esac
+    say "$dir is not on your PATH; add it, then open a new terminal:" "$dir 不在 PATH 中，执行下面的命令加入，然后新开一个终端："
+    if [ -z "$rc" ]; then
+      printf '  fish_add_path %s\\n' "$dir"
+    else
+      printf "  echo 'export PATH=\\"%s:\\$PATH\\"' >> ~/%s\\n" "$dir" "$rc"
+    fi
   elif [ "$(command -v blift)" != "$dir/blift" ]; then
     say "note: $(command -v blift) comes first on your PATH" "注意：PATH 中优先的是 $(command -v blift)"
   fi

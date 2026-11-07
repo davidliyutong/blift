@@ -159,8 +159,8 @@ b2 bucket update <bucket> allPrivate --cors-rules '[{"corsRuleName":"blift","all
 curl -fsSL https://files.example.com/install.sh | sh
 ```
 
-脚本从 GitHub Release 下载压缩包，按 `SHA256SUMS` 校验后安装到 `/usr/local/bin`（需要时使用 sudo）
-或 `~/.local/bin`。可用 `BLIFT_INSTALL_DIR`、`BLIFT_VERSION`、`BLIFT_DOWNLOAD_URL`（Release 下载的镜像地址）
+脚本从 GitHub Release 下载压缩包，按 `SHA256SUMS` 校验后安装到当前用户的 `~/.local/bin`（无需 sudo），
+如果它不在 `PATH` 中会给出加入的命令。可用 `BLIFT_INSTALL_DIR`、`BLIFT_VERSION`、`BLIFT_DOWNLOAD_URL`（Release 下载的镜像地址）
 修改默认值。Web 界面「账户设置」里会显示适用于当前服务器的命令。
 
 也可以从[最新 Release](https://github.com/davidliyutong/blift/releases/latest) 手动下载对应平台的压缩包：
@@ -168,7 +168,7 @@ curl -fsSL https://files.example.com/install.sh | sh
 ```sh
 VER=0.1.0 OS=$(uname -s | tr A-Z a-z) ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 curl -fsSL "https://github.com/davidliyutong/blift/releases/download/v$VER/blift_${VER}_${OS}_${ARCH}.tar.gz" | tar -xz
-sudo install "blift_${VER}_${OS}_${ARCH}/blift" /usr/local/bin/
+mkdir -p ~/.local/bin && install "blift_${VER}_${OS}_${ARCH}/blift" ~/.local/bin/
 ```
 
 或自行构建：`make cli`（本机平台）、`make cli-all`（Linux / macOS × amd64 / arm64）。

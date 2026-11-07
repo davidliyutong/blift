@@ -181,8 +181,8 @@ curl -fsSL https://files.example.com/install.sh | sh
 ```
 
 It downloads the archive from GitHub Releases, checks it against `SHA256SUMS` and installs to
-`/usr/local/bin` (with sudo if needed) or `~/.local/bin`. `BLIFT_INSTALL_DIR`, `BLIFT_VERSION`
-and `BLIFT_DOWNLOAD_URL` (a mirror of the release downloads) change those defaults. Account
+your own `~/.local/bin` (no sudo), printing how to add it to `PATH` if needed. `BLIFT_INSTALL_DIR`,
+`BLIFT_VERSION` and `BLIFT_DOWNLOAD_URL` (a mirror of the release downloads) change those defaults. Account
 settings in the web UI show the command for your server.
 
 Or download the archive for your platform from the
@@ -191,7 +191,7 @@ Or download the archive for your platform from the
 ```sh
 VER=0.1.0 OS=$(uname -s | tr A-Z a-z) ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 curl -fsSL "https://github.com/davidliyutong/blift/releases/download/v$VER/blift_${VER}_${OS}_${ARCH}.tar.gz" | tar -xz
-sudo install "blift_${VER}_${OS}_${ARCH}/blift" /usr/local/bin/
+mkdir -p ~/.local/bin && install "blift_${VER}_${OS}_${ARCH}/blift" ~/.local/bin/
 ```
 
 Or build it: `make cli` (this platform) or `make cli-all` (Linux and macOS, amd64 and arm64).
