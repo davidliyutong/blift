@@ -6,6 +6,8 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-07
+
 ### Added
 
 - CLI installer served by every blift server: `curl -fsSL https://<server>/install.sh | sh`
@@ -43,5 +45,6 @@ First release.
 - Docker image for linux/amd64 and linux/arm64 on GHCR, CI with an end-to-end suite against
   RustFS, and a tag-driven release pipeline.
 
-[Unreleased]: https://github.com/davidliyutong/blift/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/davidliyutong/blift/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/davidliyutong/blift/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/davidliyutong/blift/releases/tag/v0.1.0
