@@ -5,6 +5,10 @@ updates:
     schedule: { interval: weekly }
     groups:
       npm: { patterns: ['*'] }
+    ignore:
+      # Types follow the Node LTS line we run on (see the docker entry below).
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
   - package-ecosystem: gomod
     directory: /cli
     schedule: { interval: weekly }
@@ -18,3 +22,8 @@ updates:
   - package-ecosystem: docker
     directory: /deploy
     schedule: { interval: weekly }
+    ignore:
+      # Stay on the Node LTS line (24); odd majors are short-lived. Move to the next LTS by hand,
+      # together with setup-node in the workflows and @types/node.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
