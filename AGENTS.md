@@ -20,7 +20,8 @@ requests, issues and review comments. The product itself is bilingual:
   `<name>.zh-cn.md`: `README.md` / `README.zh-cn.md` and `cli/README.md` / `cli/README.zh-cn.md`.
   Both start with a language switch line (`English | [简体中文](….zh-cn.md)`). Change both in the
   same commit. `PROMPT.md` (the original brief) is frozen and needs no updates.
-- Contributor docs are English only: `AGENTS.md`, `RELEASING.md`, `docs/API.md`, `CHANGELOG.md`.
+- Contributor docs are English only: `AGENTS.md`, `CONTRIBUTING.md`, `RELEASING.md`,
+  `docs/API.md`, `CHANGELOG.md`.
 - Chinese in tests (file names, i18n output) and the bilingual messages of `install.sh` are
   intentional.
 
@@ -45,6 +46,24 @@ build on pull requests and on main. Releases are triggered by `v*` tags
 (`.github/workflows/release.yml`): CLI archives + SHA256SUMS + a multi-arch GHCR image + a GitHub
 release. The tag must match `server/src/version.ts` and `CHANGELOG.md`; the steps are in
 `RELEASING.md`. Record user-visible changes under `[Unreleased]` in `CHANGELOG.md`.
+
+## Commits, pull requests and issues
+
+The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). In short:
+
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+  `<type>(<scope>): <summary>`, with type one of `feat`, `fix`, `perf`, `refactor`, `docs`, `test`,
+  `build`, `ci`, `chore`, `revert` (and `release: vX.Y.Z` for releases only). The summary is
+  English, imperative ("add", not "added"), starts in lowercase, has no trailing period and is at
+  most 72 characters long. The body, wrapped at 72 columns, explains what changed and why; breaking changes
+  get `!` after the type and a `BREAKING CHANGE:` footer.
+- One logical change per commit; every commit passes `make test`.
+- Branches: `<type>/<short-topic>` from `main`, e.g. `feat/api-keys-inbox`.
+- Pull request titles use the commit summary format. Descriptions follow
+  `.github/pull_request_template.md`: summary, changes, testing (the commands you ran and their
+  results), notes (migrations, breaking changes, follow-ups), with `Closes #n` for issues they fix.
+- Issues are filed with the forms in `.github/ISSUE_TEMPLATE/`; titles are plain sentences
+  describing the problem or the need (no type prefix; labels classify them).
 
 ## Changing the API
 

@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in blift does not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please write in English and give the issue a title that describes the problem, e.g.
+        "Inbox upload fails for files over 5 GiB". Remove secrets, tokens, API keys and presigned
+        URLs from anything you paste. Report security vulnerabilities privately, not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The actual result, including error codes or messages.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. blift upload demo ./big.bin
+        2. …
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - Web UI
+        - CLI
+        - API / server
+        - install.sh
+        - Deployment (Workers / Docker)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versions
+      description: Server version (`GET /api/info`) and CLI version (`blift version`).
+      placeholder: server 0.1.2, CLI v0.1.2
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Server runtime
+      options:
+        - Cloudflare Workers
+        - Docker / Node
+        - Local development (make dev)
+  - type: input
+    id: storage
+    attributes:
+      label: Storage provider
+      placeholder: Cloudflare R2, Backblaze B2, AWS S3, RustFS, MinIO…
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Server logs, CLI output (with `--json` if useful) or browser console errors.
+      render: text

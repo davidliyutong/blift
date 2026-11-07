@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest a feature or a change in behaviour.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please write in English and give the issue a title that describes the need, e.g.
+        "Allow renaming a share". blift is a lightweight internal tool: folders, billing, rate
+        limiting and routing file traffic through the server are out of scope (see AGENTS.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Use case
+      description: Who needs this, what do they do today, and why is that not good enough?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should blift do? Mention the web UI, CLI and API as relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: component
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - Web UI
+        - CLI
+        - API / server
+        - install.sh
+        - Deployment (Workers / Docker)

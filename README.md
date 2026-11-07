@@ -270,7 +270,9 @@ scripts/  smoke.sh, the end-to-end test (RustFS container + real server + CLI)
 `make help` lists the targets. `make test` runs the typecheck and the unit tests,
 `make smoke` the end-to-end suite (needs Docker), `make build` everything. Changes to the API
 start in [docs/API.md](docs/API.md); [AGENTS.md](AGENTS.md) describes the architecture and the
-conventions for contributors (human or not). Releases are described in [RELEASING.md](RELEASING.md).
+conventions for contributors (human or not), and [CONTRIBUTING.md](CONTRIBUTING.md) the workflow
+and the format of commit messages, pull requests and issues (in English). Releases are described
+in [RELEASING.md](RELEASING.md).
 
 ## License
 

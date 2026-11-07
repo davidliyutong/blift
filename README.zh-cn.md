@@ -226,7 +226,8 @@ scripts/  smoke.sh —— 端到端测试（RustFS 容器 + 真实服务端 + CL
 ```
 
 `make help` 列出所有目标：`make test` 类型检查与单元测试，`make smoke` 端到端测试（需要 Docker），
-`make build` 构建全部。修改 API 先改 [docs/API.md](docs/API.md)；[AGENTS.md](AGENTS.md) 描述架构与协作约定；
+`make build` 构建全部。修改 API 先改 [docs/API.md](docs/API.md)；[AGENTS.md](AGENTS.md) 描述架构与协作约定，
+[CONTRIBUTING.md](CONTRIBUTING.md) 说明开发流程以及 commit message、PR、issue 的格式（项目工作语言为英文）；
 发版流程见 [RELEASING.md](RELEASING.md)。
 
 ## 许可
