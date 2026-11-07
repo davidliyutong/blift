@@ -11,7 +11,8 @@ All notable changes are documented here. The format follows
 - API keys for unattended CLI setup: create them under Account → API keys (single use or a number
   of uses, optional expiry), then `curl -fsSL https://host/install.sh | BLIFT_API_KEY=bliftk_… sh`
   installs and signs in, or `blift login --api-key` / `BLIFT_API_KEY`. Each use creates a CLI
-  session linked to the key; deleting a key can sign those sessions out too.
+  session linked to the key, valid for the key's sign-in lifetime (7 to 365 days, 90 by default,
+  or until revoked); deleting a key can sign those sessions out too.
 - Project inbox: owners can let anyone with a link (`/i/<token>`) upload into a project without an
   account (off by default; the link can be reset). Uploaders see nothing in the project, a taken
   name gets a number instead of replacing a file, and usage counts against the owner's quota.

@@ -49,7 +49,7 @@ export const api = {
     sessions: () => http.get<{ sessions: Session[] }>("/api/auth/sessions"),
     revokeSession: (id: string) => http.del(`/api/auth/sessions/${enc(id)}`),
     apiKeys: () => http.get<{ api_keys: ApiKey[] }>("/api/auth/api-keys"),
-    createApiKey: (body: { name: string; max_uses?: number | null; expires_in?: number | null }) =>
+    createApiKey: (body: { name: string; max_uses?: number | null; expires_in?: number | null; session_ttl?: number | null }) =>
       http.post<ApiKey & { key: string }>("/api/auth/api-keys", body),
     deleteApiKey: (id: string, revokeSessions: boolean) =>
       http.del(`/api/auth/api-keys/${enc(id)}${qs({ revoke_sessions: revokeSessions ? 1 : undefined })}`),

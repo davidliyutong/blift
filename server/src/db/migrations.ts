@@ -189,6 +189,14 @@ CREATE UNIQUE INDEX projects_inbox ON projects(inbox_token) WHERE inbox_token IS
 ALTER TABLE blobs ADD COLUMN via_inbox INTEGER NOT NULL DEFAULT 0;
 `,
   },
+  {
+    // Lifetime (seconds) of the CLI sessions an API key creates; NULL = until revoked. Existing
+    // keys keep the device-flow lifetime of 90 days.
+    name: "0004_api_key_session_ttl",
+    sql: `
+ALTER TABLE api_keys ADD COLUMN session_ttl INTEGER DEFAULT 7776000;
+`,
+  },
 ];
 
 const split = (sql: string) =>

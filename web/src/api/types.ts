@@ -97,7 +97,8 @@ export interface Session {
   name: string | null;
   created_at: number;
   last_used_at: number | null;
-  expires_at: number;
+  /** null = until revoked (sessions from API keys with session_ttl null). */
+  expires_at: number | null;
   current: boolean;
   /** The API key this CLI session was created with. */
   api_key_name: string | null;
@@ -111,6 +112,8 @@ export interface ApiKey {
   max_uses: number | null;
   use_count: number;
   expires_at: number | null;
+  /** Lifetime of each CLI session the key creates, in seconds; null = until revoked. */
+  session_ttl: number | null;
   last_used_at: number | null;
   created_at: number;
   /** Active CLI sessions created with this key. */

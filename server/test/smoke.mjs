@@ -364,7 +364,7 @@ assert.equal(await errCode(api("POST", "/api/cli/login/api-key", { api_key: k1.k
 assert.equal(await errCode(api("POST", "/api/cli/login/api-key", { api_key: "bliftk_nope" }, { auth: null, expect: 401 })), "invalid_api_key");
 assert.equal(await errCode(api("POST", "/api/auth/api-keys", { name: "x", max_uses: 0 }, { expect: 400 })), "bad_request");
 const k2 = await api("POST", "/api/auth/api-keys", { name: "fleet" }, { expect: 201 });
-assert.deepEqual([k2.max_uses, k2.expires_at], [null, null]);
+assert.deepEqual([k2.max_uses, k2.expires_at, k2.session_ttl], [null, null, 90 * 86400]);
 const fleetTokens = [];
 for (const host of ["build-1", "build-2"])
   fleetTokens.push((await api("POST", "/api/cli/login/api-key", { api_key: k2.key, client_name: host }, { auth: null })).token);
@@ -378,7 +378,17 @@ await api("DELETE", `/api/auth/api-keys/${k2.id}?revoke_sessions=1`, undefined, 
 for (const t of fleetTokens) assert.equal(await errCode(api("GET", "/api/auth/me", undefined, { auth: t, expect: 401 })), "unauthorized");
 assert.equal(await errCode(api("POST", "/api/cli/login/api-key", { api_key: k2.key }, { auth: null, expect: 401 })), "invalid_api_key");
 assert.equal(await errCode(api("DELETE", `/api/auth/api-keys/${k2.id}`, undefined, { expect: 404 })), "not_found");
-step("API keys: single use, unlimited, sessions linked to the key, delete signs them out");
+// Sign-in lifetime: a day, or until revoked (survives GC, ends with the key's revocation below).
+const kDay = await api("POST", "/api/auth/api-keys", { name: "day", session_ttl: 86400 }, { expect: 201 });
+const kForever = await api("POST", "/api/auth/api-keys", { name: "forever", session_ttl: null, max_uses: 1 }, { expect: 201 });
+assert.deepEqual([kDay.session_ttl, kForever.session_ttl], [86400, null]);
+assert.equal(await errCode(api("POST", "/api/auth/api-keys", { name: "x", session_ttl: 60 }, { expect: 400 })), "bad_request");
+await api("POST", "/api/cli/login/api-key", { api_key: kDay.key, client_name: "day-host" }, { auth: null });
+const forever = await api("POST", "/api/cli/login/api-key", { api_key: kForever.key, client_name: "forever-host" }, { auth: null });
+const lifetimes = Object.fromEntries((await api("GET", "/api/auth/sessions")).sessions.map((x) => [x.name, x.expires_at]));
+assert.equal(lifetimes["forever-host"], null);
+assert.ok(Math.abs(lifetimes["day-host"] - (Date.now() + 86_400_000)) < 120_000, `day session expires_at ${lifetimes["day-host"]}`);
+step("API keys: single use, unlimited, sessions linked to the key, delete signs them out, sign-in lifetime");
 
 // Inbox: anonymous uploads into a project (off by default, link visible to editors and owners).
 const ib = await api("POST", "/api/projects", { name: "inbox", description: "drop files here" }, { expect: 201 });
@@ -446,6 +456,12 @@ const gc2 = await api("POST", "/api/admin/gc", {});
 assert.equal(gc1.result.projects_purged, 1); // the empty demo2 project
 assert.equal(gc2.result.projects_purged, 1);
 step(`GC removes objects (${gc1.result.objects_deleted}) and purges deleted projects`);
+
+// A sign-in "until revoked" outlives GC and ends only when revoked (here: with its key).
+await api("GET", "/api/auth/me", undefined, { auth: forever.token });
+await api("DELETE", `/api/auth/api-keys/${kForever.id}?revoke_sessions=1`, undefined, { expect: 204 });
+assert.equal(await errCode(api("GET", "/api/auth/me", undefined, { auth: forever.token, expect: 401 })), "unauthorized");
+step("an API-key sign-in without expiry survives GC until revoked");
 
 await api("DELETE", `/api/projects/${lp.id}`, undefined, { expect: 204 }); // releases its usage at once
 await api("DELETE", `/api/projects/${ib.id}`, undefined, { expect: 204 });

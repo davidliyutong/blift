@@ -202,8 +202,8 @@ curl -fsSL https://files.example.com/install.sh | BLIFT_API_KEY=bliftk_… sh
 ```
 
 `blift login --api-key bliftk_…` (or `BLIFT_API_KEY=… blift login`) does the same for an installed
-CLI. Every use creates a CLI session listed under Account → Sessions; deleting the key can sign
-those out as well.
+CLI. Every use creates a CLI session listed under Account → Sessions, valid for the key's sign-in
+lifetime: 7 to 365 days (90 by default) or until revoked; deleting the key can sign those out as well.
 
 Or download the archive for your platform from the
 [latest release](https://github.com/davidliyutong/blift/releases/latest) yourself:

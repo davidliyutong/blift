@@ -274,7 +274,9 @@ function SessionsSection() {
                   </Table.Cell>
                   <Table.Cell className="hidden text-kumo-subtle sm:table-cell">{formatDate(s.created_at, lang)}</Table.Cell>
                   <Table.Cell className="text-kumo-subtle">{formatRelative(s.last_used_at, lang)}</Table.Cell>
-                  <Table.Cell className="hidden text-kumo-subtle md:table-cell">{formatDate(s.expires_at, lang)}</Table.Cell>
+                  <Table.Cell className="hidden text-kumo-subtle md:table-cell">
+                    {s.expires_at ? formatDate(s.expires_at, lang) : t("common.never")}
+                  </Table.Cell>
                   <Table.Cell className="text-right">
                     {!s.current && (
                       <Button
@@ -328,6 +330,10 @@ function CliSection() {
 
 const KEY_EXPIRY = { "1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400, never: 0 } as const;
 type KeyExpiry = keyof typeof KEY_EXPIRY;
+/** How long each sign-in made with a key lasts, in days; 0 = until revoked. Keys are not numeric:
+ * objects list integer-like keys first, which would reorder the select. */
+const SESSION_TTL = { d7: 7, d30: 30, d90: 90, d365: 365, never: 0 } as const;
+type SessionTtl = keyof typeof SESSION_TTL;
 
 const keyState = (k: ApiKey): "active" | "expired" | "used" =>
   k.expires_at != null && k.expires_at < Date.now()
@@ -337,8 +343,16 @@ const keyState = (k: ApiKey): "active" | "expired" | "used" =>
       : "active";
 
 /** Keys that sign the CLI in without a browser (`blift login --api-key`, install.sh). */
+/** "90 days" / "Until revoked" for a key's session_ttl (seconds). */
+function useSessionTtlLabel() {
+  const { t } = useI18n();
+  return (seconds: number | null) =>
+    seconds == null ? t("apikeys.untilRevoked") : t("apikeys.days", { n: Math.round(seconds / 86400) });
+}
+
 function ApiKeysSection() {
   const { t, lang } = useI18n();
+  const ttlLabel = useSessionTtlLabel();
   const keys = useAsync(() => api.auth.apiKeys().then((r) => r.api_keys), []);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<ApiKey | null>(null);
@@ -377,6 +391,7 @@ function ApiKeysSection() {
                   <Table.Head>{t("common.name")}</Table.Head>
                   <Table.Head>{t("apikeys.uses")}</Table.Head>
                   <Table.Head className="hidden sm:table-cell">{t("account.expires")}</Table.Head>
+                  <Table.Head className="hidden lg:table-cell">{t("apikeys.sessionTtl")}</Table.Head>
                   <Table.Head className="hidden md:table-cell">{t("account.lastUsed")}</Table.Head>
                   <Table.Head className="hidden md:table-cell">{t("apikeys.sessions")}</Table.Head>
                   <Table.Head className="w-24" />
@@ -404,6 +419,7 @@ function ApiKeysSection() {
                       <Table.Cell className="hidden text-kumo-subtle sm:table-cell">
                         {k.expires_at ? formatDate(k.expires_at, lang) : t("common.never")}
                       </Table.Cell>
+                      <Table.Cell className="hidden text-kumo-subtle lg:table-cell">{ttlLabel(k.session_ttl)}</Table.Cell>
                       <Table.Cell className="hidden text-kumo-subtle md:table-cell">
                         {k.last_used_at ? formatRelative(k.last_used_at, lang) : "—"}
                       </Table.Cell>
@@ -443,13 +459,16 @@ function CreateApiKeyDialog({
   const [name, setName] = useState("");
   const [maxUses, setMaxUses] = useState("1");
   const [expiry, setExpiry] = useState<KeyExpiry>("7d");
+  const [sessionTtl, setSessionTtl] = useState<SessionTtl>("d90");
   const [key, setKey] = useState<string | null>(null);
+  const ttlLabel = useSessionTtlLabel();
 
   useEffect(() => {
     if (open) {
       setName("");
       setMaxUses("1");
       setExpiry("7d");
+      setSessionTtl("d90");
       setKey(null);
     }
   }, [open]);
@@ -492,6 +511,7 @@ function CreateApiKeyDialog({
           name: name.trim(),
           max_uses: maxUses ? Number(maxUses) : null,
           expires_in: KEY_EXPIRY[expiry] || null,
+          session_ttl: SESSION_TTL[sessionTtl] * 86400 || null,
         });
         setKey(created.key);
         onCreated();
@@ -517,7 +537,7 @@ function CreateApiKeyDialog({
           placeholder="∞"
         />
         <Select
-          label={t("share.expiry")}
+          label={t("apikeys.expiry")}
           hideLabel={false}
           className="w-full"
           value={expiry}
@@ -531,6 +551,15 @@ function CreateApiKeyDialog({
           }}
         />
       </div>
+      <Select
+        label={t("apikeys.sessionTtl")}
+        hideLabel={false}
+        description={t("apikeys.sessionTtlHint")}
+        className="w-full"
+        value={sessionTtl}
+        onValueChange={(v) => setSessionTtl(v as SessionTtl)}
+        items={Object.fromEntries(Object.entries(SESSION_TTL).map(([k, d]) => [k, ttlLabel(d ? d * 86400 : null)]))}
+      />
     </FormDialog>
   );
 }

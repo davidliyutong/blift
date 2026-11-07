@@ -131,20 +131,20 @@ r.post("/login/api-key", async (c) => {
   const db = c.env.DB;
   const t = now();
   const invalid = () => new ApiError(401, "invalid_api_key", "API key is invalid, expired or used up");
-  const row = await one<UserRow & { key_id: string }>(
+  const row = await one<UserRow & { key_id: string; key_session_ttl: number | null }>(
     db,
-    `SELECT u.*, k.id AS key_id FROM api_keys k JOIN users u ON u.id = k.user_id
+    `SELECT u.*, k.id AS key_id, k.session_ttl AS key_session_ttl FROM api_keys k JOIN users u ON u.id = k.user_id
      WHERE k.key_hash = ? AND (k.expires_at IS NULL OR k.expires_at > ?) AND (k.max_uses IS NULL OR k.use_count < k.max_uses)`,
     await sha256Hex(key),
     t,
   );
   if (!row) throw invalid();
-  const { key_id: keyId, ...user } = row;
+  const { key_id: keyId, key_session_ttl: ttl, ...user } = row;
   if (user.status !== "active") throw new ApiError(403, "account_disabled", "account disabled");
   // Count the use first; the WHERE clause enforces max_uses atomically.
   if (!(await run(db, "UPDATE api_keys SET use_count = use_count + 1, last_used_at = ? WHERE id = ? AND (max_uses IS NULL OR use_count < max_uses)", t, keyId)))
     throw invalid();
-  const token = await createSession(c, user.id, "cli", clientName, false, keyId);
+  const token = await createSession(c, user.id, "cli", clientName, false, { apiKeyId: keyId, ttl: ttl == null ? null : ttl * 1000 });
   c.set("statsUser", user.id);
   return c.json({ token, user: toUser(user, await getSettings(db)) });
 });

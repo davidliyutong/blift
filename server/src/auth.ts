@@ -12,6 +12,11 @@ import { newToken } from "./lib/ids";
 export const SESSION_COOKIE = "blift_session";
 const DAY = 86_400_000;
 const TTL = { web: 30 * DAY, cli: 90 * DAY };
+/**
+ * expires_at of sessions that last until revoked (API keys with session_ttl = null): 9999-12-31.
+ * The column is NOT NULL and every check is `expires_at > now`; the API reports it as null.
+ */
+export const NO_EXPIRY = 253_402_300_799_999;
 
 export const isSecure = (c: Ctx) => publicOrigin(c).startsWith("https:");
 
@@ -21,7 +26,8 @@ export async function createSession(
   kind: "web" | "cli",
   name: string | null,
   mfaPending: boolean,
-  apiKeyId: string | null = null,
+  /** ttl in ms (default by kind; null = until revoked). */
+  opts: { apiKeyId?: string; ttl?: number | null } = {},
 ): Promise<string> {
   const token = newToken();
   const t = now();
@@ -34,9 +40,9 @@ export async function createSession(
     name,
     mfaPending,
     t,
-    t + TTL[kind],
+    opts.ttl === null ? NO_EXPIRY : t + (opts.ttl ?? TTL[kind]),
     t,
-    apiKeyId,
+    opts.apiKeyId ?? null,
   );
   return token;
 }

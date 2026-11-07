@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { clearSessionCookie, clientName, createSession, requireUser, setSessionCookie } from "../auth";
+import { clearSessionCookie, clientName, createSession, NO_EXPIRY, requireUser, setSessionCookie } from "../auth";
 import { all, now, one, run, stmt } from "../db";
 import type { AppEnv, UserRow } from "../env";
 import { decrypt, encrypt, hashPassword, sha256Hex, verifyPassword } from "../lib/crypto";
@@ -149,7 +149,9 @@ r.get("/sessions", async (c) => {
     u.id,
     now(),
   );
-  return c.json({ sessions: rows.map((s) => ({ ...s, current: s.id === current })) });
+  return c.json({
+    sessions: rows.map((s) => ({ ...s, expires_at: s.expires_at >= NO_EXPIRY ? null : s.expires_at, current: s.id === current })),
+  });
 });
 
 r.delete("/sessions/:id", async (c) => {
@@ -162,7 +164,11 @@ r.delete("/sessions/:id", async (c) => {
 
 // ---- API keys: credentials for unattended CLI logins (`blift login --api-key`, install.sh with
 // BLIFT_API_KEY). Every use creates a CLI session; only the key's SHA-256 is stored and the key
-// itself is shown once, when it is created.
+// itself is shown once, when it is created. session_ttl sets how long those sessions last
+// (seconds; null = until revoked: signed out in the sessions list or together with the key).
+
+/** Default lifetime of a key's sessions: that of a device-flow CLI login. */
+const DEFAULT_SESSION_TTL = 90 * 86400;
 
 type ApiKeyRow = {
   id: string;
@@ -171,6 +177,7 @@ type ApiKeyRow = {
   max_uses: number | null;
   use_count: number;
   expires_at: number | null;
+  session_ttl: number | null;
   last_used_at: number | null;
   created_at: number;
   session_count: number;
@@ -183,6 +190,7 @@ const toApiKey = (k: ApiKeyRow) => ({
   max_uses: k.max_uses,
   use_count: k.use_count,
   expires_at: k.expires_at,
+  session_ttl: k.session_ttl,
   last_used_at: k.last_used_at,
   created_at: k.created_at,
   session_count: k.session_count,
@@ -206,6 +214,8 @@ r.post("/api-keys", async (c) => {
   const name = str(b.name, "name", 100);
   const maxUses = b.max_uses == null ? null : int(b.max_uses, "max_uses", 1, 1_000_000);
   const expiresIn = b.expires_in == null ? null : int(b.expires_in, "expires_in", 60, 3650 * 86400);
+  const sessionTtl =
+    b.session_ttl === undefined ? DEFAULT_SESSION_TTL : b.session_ttl === null ? null : int(b.session_ttl, "session_ttl", 86400, 3650 * 86400);
   const key = newApiKey();
   const row: ApiKeyRow = {
     id: newId(),
@@ -214,13 +224,14 @@ r.post("/api-keys", async (c) => {
     max_uses: maxUses,
     use_count: 0,
     expires_at: expiresIn ? now() + expiresIn * 1000 : null,
+    session_ttl: sessionTtl,
     last_used_at: null,
     created_at: now(),
     session_count: 0,
   };
   await run(
     c.env.DB,
-    "INSERT INTO api_keys (id, user_id, name, key_hash, prefix, max_uses, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO api_keys (id, user_id, name, key_hash, prefix, max_uses, expires_at, session_ttl, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     row.id,
     u.id,
     row.name,
@@ -228,6 +239,7 @@ r.post("/api-keys", async (c) => {
     row.prefix,
     row.max_uses,
     row.expires_at,
+    row.session_ttl,
     row.created_at,
   );
   return c.json({ ...toApiKey(row), key }, 201);

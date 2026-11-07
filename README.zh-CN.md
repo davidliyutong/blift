@@ -176,7 +176,8 @@ curl -fsSL https://files.example.com/install.sh | BLIFT_API_KEY=bliftk_… sh
 ```
 
 已安装的 CLI 用 `blift login --api-key bliftk_…`（或 `BLIFT_API_KEY=… blift login`）。每使用一次都会在
-「账户设置 → 会话」中产生一个 CLI 会话；删除 key 时可以一并注销这些会话。
+「账户设置 → 会话」中产生一个 CLI 会话，有效期由 key 的「登录有效期」决定：7～365 天（默认 90 天）或直到撤销；
+删除 key 时可以一并注销这些会话。
 
 也可以从[最新 Release](https://github.com/davidliyutong/blift/releases/latest) 手动下载对应平台的压缩包：
 

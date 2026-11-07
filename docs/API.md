@@ -130,10 +130,10 @@ Errors: `setup_done`, `invalid_secret`, `not_configured` (server has no `BOOTSTR
 | POST | `/api/auth/totp/enable` | `{code}` | 204 |
 | POST | `/api/auth/totp/disable` | `{code}` | 204 |
 | POST | `/api/auth/password` | `{current_password?, new_password}` | 204 |
-| GET | `/api/auth/sessions` | – | `{sessions: [{id, kind: "web"\|"cli", name, created_at, last_used_at, expires_at, current, api_key_name}]}` |
+| GET | `/api/auth/sessions` | – | `{sessions: [{id, kind: "web"\|"cli", name, created_at, last_used_at, expires_at, current, api_key_name}]}` (`expires_at` null = until revoked) |
 | DELETE | `/api/auth/sessions/:id` | – | 204 |
 | GET | `/api/auth/api-keys` | – | `{api_keys: ApiKey[]}` |
-| POST | `/api/auth/api-keys` | `{name, max_uses?, expires_in?}` | `ApiKey & {key}` (201) |
+| POST | `/api/auth/api-keys` | `{name, max_uses?, expires_in?, session_ttl?}` | `ApiKey & {key}` (201) |
 | DELETE | `/api/auth/api-keys/:id?revoke_sessions=1` | – | 204 |
 
 A session whose user has TOTP enabled starts in *pending MFA* state (both local password
@@ -141,8 +141,9 @@ login and OIDC login). While pending, every endpoint except `/api/auth/mfa`, `/a
 and `/api/auth/logout` returns `401 mfa_required`.
 
 **API keys** let the CLI sign in without a browser (servers, scripts): `blift login --api-key`
-or `BLIFT_API_KEY`, and `install.sh` (see below). Each use creates a 90-day CLI session; the key
-is only a way to obtain one.
+or `BLIFT_API_KEY`, and `install.sh` (see below). Each use creates a CLI session that lasts
+`session_ttl` (by default 90 days, like a device-flow login, or until revoked); the key is only a
+way to obtain one.
 
 ```ts
 type ApiKey = {
@@ -150,13 +151,17 @@ type ApiKey = {
   prefix: string;                 // first characters of the key, e.g. "bliftk_AbCd"
   max_uses: number | null;        // null = unlimited; 1 = single use
   use_count: number;
-  expires_at: number | null;      // null = never
+  expires_at: number | null;      // the key itself; null = never
+  session_ttl: number | null;     // seconds each session it creates lasts; null = until revoked
   last_used_at: number | null; created_at: number;
   session_count: number;          // active CLI sessions created with this key
 };
 ```
 Keys look like `bliftk_<32 base62 chars>`. Only their SHA-256 is stored: `key` is returned once, by
-the POST. `max_uses` 1–1 000 000 or null, `expires_in` seconds (60 s – 10 years) or null. A key
+the POST. `max_uses` 1–1 000 000 or null, `expires_in` seconds (60 s – 10 years) or null,
+`session_ttl` seconds (1 day – 10 years), null for sessions that never expire (they end when they
+are signed out, with `revoke_sessions=1`, a password change or when the user is disabled), or
+omitted for 90 days. A key
 does not need a second factor (the user created it while signed in). `revoke_sessions=1` also
 signs out the CLI sessions created with the key. Expired keys are removed by GC after 7 days.
 
@@ -199,7 +204,7 @@ unreachable → `502 upstream_error`. Responses are `immutable`; Workers keep th
 
 **With an API key** (no browser): `POST /api/cli/login/api-key` (no auth) body
 `{ "api_key": "bliftk_…", "client_name": "blift-cli on build-01" }` → `200 { "token", "user" }`, like
-an approved poll. Each call counts one use of the key. Errors: `invalid_api_key` (unknown, expired
+an approved poll; the session lasts the key's `session_ttl`. Each call counts one use of the key. Errors: `invalid_api_key` (unknown, expired
 or used up), `account_disabled`.
 
 Web-side (authenticated):
