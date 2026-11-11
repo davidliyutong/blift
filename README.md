@@ -29,7 +29,8 @@ and bookkeeping.
   location label such as "Singapore" helps users pick); `Apply CORS` configures the bucket from
   the admin UI.
 - **Sharing.** Public links for a single file or a whole project, with optional password,
-  expiry and download limit; recipients need no account.
+  expiry and download limit; recipients need no account, and `wget` / `curl` download straight
+  from the link.
 - **Inbox.** A project can take anonymous uploads through a link (off by default): senders need no
   account and see nothing in the project; a name that is taken gets a number instead of replacing.
 - **Single sign-on.** OIDC with PKCE, tuned for Authentik; HS256, RS256 and ES256 ID tokens;
@@ -105,7 +106,9 @@ make deploy         # builds the web UI and deploys API + static assets + the GC
 
 Migrations run automatically on the first request. The committed `server/wrangler.toml` is a
 template; your deployment's values (D1 id, custom domain, `PUBLIC_URL`) go in
-`server/wrangler.local.toml`, which the Makefile uses whenever it exists. For a custom domain add
+`server/wrangler.local.toml`, which the Makefile uses whenever it exists. `make cf-init` copies
+the template once: when an upgrade changes it (CHANGELOG.md says so, e.g. a new `run_worker_first`
+path), make the same change in your copy. For a custom domain add
 `routes = [{ pattern = "files.example.com", custom_domain = true }]` together with
 `workers_dev = true` (wrangler otherwise turns the `*.workers.dev` URL off), and set `PUBLIC_URL`
 under `[vars]` when the Worker has more than one hostname.

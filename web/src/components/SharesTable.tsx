@@ -6,6 +6,7 @@ import {
   FolderSimpleIcon,
   LockSimpleIcon,
   ShareNetworkIcon,
+  TerminalWindowIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
 import { Link } from "react-router";
@@ -55,7 +56,7 @@ export function SharesTable({
                 <Table.Head className="text-right">{t("share.downloads")}</Table.Head>
                 <Table.Head className="hidden text-right md:table-cell">{t("share.views")}</Table.Head>
                 <Table.Head className="hidden lg:table-cell">{t("common.created")}</Table.Head>
-                <Table.Head className="w-28" />
+                <Table.Head className="w-36" />
               </Table.Row>
             </Table.Header>
             <Table.Body>
@@ -123,6 +124,19 @@ export function SharesTable({
                             toast.success(t("common.copied"));
                           }}
                         />
+                        {s.download_url && !s.has_password && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            shape="square"
+                            icon={TerminalWindowIcon}
+                            title={t("share.copyDirectLink")}
+                            onClick={async () => {
+                              await copyText(s.download_url!);
+                              toast.success(t("common.copied"));
+                            }}
+                          />
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"

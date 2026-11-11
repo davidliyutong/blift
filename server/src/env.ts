@@ -13,6 +13,8 @@ export type Bindings = {
   GC_BUDGET?: string;
   /** Max database rows GC writes per run (default 5000), in statements of ≤ 100 rows. */
   GC_ROWS?: string;
+  /** Workers static assets (the web app); share pages are handed to it. Not set on Node. */
+  ASSETS?: { fetch(req: Request): Promise<Response> };
 };
 
 export type Role = "admin" | "user";

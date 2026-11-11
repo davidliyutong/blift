@@ -50,9 +50,9 @@ go test ./... && go vet ./...
 | `blift rm <project> <file>... [-y]` | Delete files |
 | `blift mv <project> <file> <new-name>` | Rename a file |
 | `blift url <project> <file>` | Print a presigned download URL (valid for 1 hour) |
-| `blift share create <project> [file] [--password P] [--expires 7d] [--max-downloads N]` | Create a share (the whole project when no file is given) |
+| `blift share create <project> [file] [--password P] [--expires 7d] [--max-downloads N]` | Create a share (the whole project when no file is given); for a file without a password it also prints a direct link for `wget` / `curl` |
 | `blift share ls [project]` / `share rm <share-id>` | List / delete shares |
-| `blift share get <share-url-or-token> [file...] [--password P] [-o dir]` | Download from a share link without signing in |
+| `blift share get <share-url-or-token> [file...] [--password P] [-o dir]` | Download from a share link without signing in (a direct link downloads just its file) |
 | `blift update [--check] [--version X.Y.Z] [--force]` | Update in place to the latest release (alias `upgrade`) |
 
 A project argument can be an ID, a name or `owner/name`: an exact ID match wins; among projects
@@ -96,6 +96,7 @@ blift dl datasets model.ckpt -o ~/Downloads/        # > 64 MiB: parallel range r
 blift dl datasets --all -o ./backup
 blift share create datasets model.ckpt --password 1234 --expires 7d
 blift share get https://files.example.com/s/AbCd123 --password 1234 -o .
+wget https://files.example.com/s/XyZ7890/notes.md   # no blift needed: a direct link (shares without a password)
 blift --json ls datasets | jq '.[].name'
 ```
 

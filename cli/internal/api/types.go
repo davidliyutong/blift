@@ -83,6 +83,7 @@ type Share struct {
 	ProjectName   string  `json:"project_name"`
 	BlobID        *string `json:"blob_id"`
 	BlobName      *string `json:"blob_name"`
+	DownloadURL   *string `json:"download_url"` // direct link for wget/curl; single-file shares only
 	HasPassword   bool    `json:"has_password"`
 	ExpiresAt     *int64  `json:"expires_at"`
 	MaxDownloads  *int64  `json:"max_downloads"`

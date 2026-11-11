@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -82,6 +83,9 @@ func shareCreateCmd() *cobra.Command {
 			}
 			fmt.Println(s.URL)
 			info("share.created", ui.TimePtr(s.ExpiresAt, i18n.T("never")))
+			if s.DownloadURL != nil && !s.HasPassword {
+				info("share.direct", *s.DownloadURL)
+			}
 			return nil
 		},
 	}
@@ -157,26 +161,28 @@ func shareRmCmd() *cobra.Command {
 	}
 }
 
-// parseShareRef accepts https://host[/prefix]/s/<token> or a bare token.
-func parseShareRef(ref, fallbackServer string) (server, token string, err error) {
+// shareURLPath matches the path of a share link, [/prefix]/s/<token>, or of a direct link to one
+// of its files, [/prefix]/s/<token>/<name>.
+var shareURLPath = regexp.MustCompile(`^(.*)/s/([^/]+)(?:/([^/]+))?/?$`)
+
+// parseShareRef accepts https://host[/prefix]/s/<token>[/<name>] or a bare token. name is the
+// file of a direct link, else "".
+func parseShareRef(ref, fallbackServer string) (server, token, name string, err error) {
 	if !strings.Contains(ref, "://") {
 		if fallbackServer == "" {
-			return "", "", errors.New(i18n.T("no_server"))
+			return "", "", "", errors.New(i18n.T("no_server"))
 		}
-		return fallbackServer, ref, nil
+		return fallbackServer, ref, "", nil
 	}
 	u, err := url.Parse(ref)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	i := strings.LastIndex(u.Path, "/s/")
-	if i >= 0 {
-		token = strings.Trim(u.Path[i+3:], "/")
+	m := shareURLPath.FindStringSubmatch(u.Path)
+	if m == nil {
+		return "", "", "", errors.New(i18n.T("share.bad_url", ref))
 	}
-	if token == "" {
-		return "", "", errors.New(i18n.T("share.bad_url", ref))
-	}
-	return u.Scheme + "://" + u.Host + u.Path[:i], token, nil
+	return u.Scheme + "://" + u.Host + m[1], m[2], m[3], nil
 }
 
 func shareGetCmd() *cobra.Command {
@@ -192,9 +198,12 @@ func shareGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			server, token, err := parseShareRef(args[0], currentServer(cfg))
+			server, token, name, err := parseShareRef(args[0], currentServer(cfg))
 			if err != nil {
 				return err
+			}
+			if name != "" && len(args) == 1 { // a direct link: just that file
+				args = append(args, name)
 			}
 			ctx, c := cmd.Context(), api.New(server, "")
 			sh, access, err := openShare(ctx, c, token, password)

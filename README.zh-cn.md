@@ -23,7 +23,7 @@ AWS S3、RustFS、MinIO……）为后端。它原生运行在 **Cloudflare Work
 - **极简结构**：只有「项目 → 文件」两级，没有文件夹树。
 - **直传**：≤ 64 MiB 的文件单次预签名 `PUT`，更大的自动分片并行上传（单片失败单独重试）；CLI 分段并行下载。
 - **任意 S3 兼容存储**：可同时配置多个后端，按项目选择（可为后端标注「新加坡」这样的区域，方便用户挑选）；管理页「应用 CORS」一键配置存储桶。
-- **分享**：单个文件或整个项目的公开链接，可设访问密码、有效期、下载次数上限；接收方无需账号。
+- **分享**：单个文件或整个项目的公开链接，可设访问密码、有效期、下载次数上限；接收方无需账号，也可以直接用 `wget` / `curl` 下载。
 - **收件箱**：项目可开启匿名上传链接（默认关闭）：上传者无需账号，看不到项目里的任何文件；重名时自动编号，不会覆盖。
 - **单点登录**：OIDC + PKCE，优先适配 Authentik；ID Token 支持 HS256 / RS256 / ES256；首次登录自动注册，
   可按 IdP 用户组授予管理员。
@@ -90,7 +90,8 @@ make deploy         # 构建前端并部署 API + 静态资源 + GC 定时任务
 ```
 
 数据库迁移在第一次请求时自动执行。仓库里的 `server/wrangler.toml` 只是模板；你自己的部署配置（D1 ID、
-自定义域名、`PUBLIC_URL`）放在 `server/wrangler.local.toml`，Makefile 检测到它就会使用。自定义域名：加上
+自定义域名、`PUBLIC_URL`）放在 `server/wrangler.local.toml`，Makefile 检测到它就会使用。`make cf-init` 只复制一次模板：
+升级时模板若有变化（CHANGELOG.md 会写明，例如 `run_worker_first` 新增路径），请在你的副本里做同样的修改。自定义域名：加上
 `routes = [{ pattern = "files.example.com", custom_domain = true }]`，并同时写 `workers_dev = true`
 （否则 wrangler 会关闭 `*.workers.dev` 地址）；Worker 有多个域名时，在 `[vars]` 中设置 `PUBLIC_URL` 作为规范地址。
 

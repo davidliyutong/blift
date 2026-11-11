@@ -77,9 +77,12 @@ The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). 
 ## Server architecture (`server/src`)
 
 - `app.ts` assembles the Hono app (basePath `/api`); paths outside `/api` that the API handles
-  (currently only `/install.sh`) are listed in `ALIASES` and must also be added to
-  `run_worker_first` in `wrangler.toml`. `worker.ts` is the Workers entry point (fetch + scheduled
-  GC); `node.ts` is the Docker entry point (node:sqlite, static files, GC timer, generated secrets).
+  (`/install.sh` and the share links `/s/<token>[/<name>]`) are rewritten onto `/api` routes by
+  `ALIASES` and must also be routed to the API in `node.ts` and listed in `run_worker_first` in
+  `wrangler.toml`. Browsers opening a share link get the SPA instead (`isSharePage`): both entry
+  points hand them over before the API runs, so page loads touch no database. `worker.ts` is the
+  Workers entry point (fetch + scheduled GC); `node.ts` is the Docker entry point (node:sqlite,
+  static files, GC timer, generated secrets).
 - The `DB` interface in `db/index.ts` is a **subset of the D1 API**; `db/node-sqlite.ts` implements
   it on Node. Use only the `one/all/run/stmt` helpers and `db.batch()`; no ORM.
 - `db/migrations.ts`: migrations are **append-only, never modified**; they run at startup / on the

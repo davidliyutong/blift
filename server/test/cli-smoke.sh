@@ -84,6 +84,23 @@ cmp "$WORK/up/big.bin" "$WORK/shared/big.bin" || fail "shared big.bin differs"
 "$BLIFT" share ls demo | grep -q pw1234 && fail "password leaked in share ls"
 ok "share create (password) + anonymous share get"
 
+# Direct links: plain curl and wget save the file under its own name; share get takes them too.
+"$BLIFT" share create demo greeting.txt >"$WORK/share.out" 2>"$WORK/share.err"
+DIRECT=$(grep -oE 'https?://[^ ]+/s/[0-9A-Za-z]+/greeting\.txt' "$WORK/share.err")
+[ -n "$DIRECT" ] || fail "share create prints no direct link: $(cat "$WORK/share.err")"
+SHARE=$(cat "$WORK/share.out")
+mkdir -p "$WORK/d1" "$WORK/d2" "$WORK/d3" "$WORK/d4"
+(cd "$WORK/d1" && curl -sfOJL "$SHARE") || fail "curl -OJL share link"
+(cd "$WORK/d2" && curl -sfOL "$DIRECT") || fail "curl -OL direct link"
+"$BLIFT" -q share get "$DIRECT" -o "$WORK/d3"
+for d in d1 d2 d3; do cmp "$WORK/up/hello.txt" "$WORK/$d/greeting.txt" || fail "direct download into $d"; done
+if command -v wget >/dev/null; then
+  (cd "$WORK/d4" && wget -q "$DIRECT") || fail "wget direct link"
+  cmp "$WORK/up/hello.txt" "$WORK/d4/greeting.txt" || fail "wget saved: $(ls "$WORK/d4")"
+fi
+curl -sf "$URL" >/dev/null && fail "password share downloaded without a password"
+ok "direct links: curl -OJL, curl -O, wget, share get"
+
 # Self-update through this server (latest release lookup + download relay); a copy is replaced.
 "$BLIFT" update --check >/dev/null || fail "update --check"
 cp "$BLIFT" "$WORK/blift-copy"

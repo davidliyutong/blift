@@ -44,9 +44,9 @@ go test ./... && go vet ./...
 | `blift rm <项目> <文件>... [-y]` | 删除文件 |
 | `blift mv <项目> <文件> <新名称>` | 重命名文件 |
 | `blift url <项目> <文件>` | 输出预签名下载链接（1 小时有效） |
-| `blift share create <项目> [文件] [--password P] [--expires 7d] [--max-downloads N]` | 创建分享（不指定文件即分享整个项目） |
+| `blift share create <项目> [文件] [--password P] [--expires 7d] [--max-downloads N]` | 创建分享（不指定文件即分享整个项目）；分享单个文件且不设密码时，还会输出可用于 `wget` / `curl` 的直接下载链接 |
 | `blift share ls [项目]` / `share rm <分享ID>` | 列出 / 删除分享 |
-| `blift share get <分享链接或token> [文件...] [--password P] [-o 目录]` | 免登录从分享链接下载 |
+| `blift share get <分享链接或token> [文件...] [--password P] [-o 目录]` | 免登录从分享链接下载（直接下载链接只下载对应的文件） |
 | `blift update [--check] [--version X.Y.Z] [--force]` | 原地更新到最新版本（别名 `upgrade`） |
 
 项目参数可以是 ID、名称或 `所有者/名称`：ID 精确匹配优先；同名时优先自己拥有的项目，仍有歧义则报错并列出候选。
@@ -85,6 +85,7 @@ blift dl datasets model.ckpt -o ~/Downloads/        # >64 MiB 使用并行 Range
 blift dl datasets --all -o ./backup
 blift share create datasets model.ckpt --password 1234 --expires 7d
 blift share get https://files.example.com/s/AbCd123 --password 1234 -o .
+wget https://files.example.com/s/XyZ7890/notes.md   # 无需 blift：直接下载链接（未设密码的分享）
 blift --json ls datasets | jq '.[].name'
 ```
 

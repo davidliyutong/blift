@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createApp, isSharePage, resolveAlias } from "../src/app";
 import { all } from "../src/db";
 import { migrate } from "../src/db/migrations";
 import { NodeD1 } from "../src/db/node-sqlite";
@@ -11,6 +12,7 @@ import { decrypt, encrypt, hashPassword, verifyPassword } from "../src/lib/crypt
 import { blobName, projectName } from "../src/lib/http";
 import { newApiKey, newId, newShareToken, newToken, newUserCode } from "../src/lib/ids";
 import { installScript } from "../src/lib/install";
+import { signJwt } from "../src/lib/jwt";
 import { contentDisposition, S3 } from "../src/lib/s3";
 import { runGc, WRITE_BATCH } from "../src/services/gc";
 import { BLOB_SORTS, listBlobs } from "../src/services/projects";
@@ -337,5 +339,125 @@ describe("install.sh", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("share links", () => {
+  const req = (path: string, headers: Record<string, string> = {}, method = "GET") =>
+    new Request(`https://files.example.com${path}`, { method, headers });
+  const browser = { accept: "text/html,application/xhtml+xml,*/*;q=0.8", "user-agent": "Mozilla/5.0 Firefox/140.0" };
+
+  it("give browsers and link previews the page, wget and curl the API", () => {
+    expect(isSharePage(req("/s/AbC123", browser))).toBe(true);
+    expect(isSharePage(req("/s/AbC123/", browser, "HEAD"))).toBe(true);
+    expect(isSharePage(req("/s/AbC123", { accept: "*/*", "user-agent": "Slackbot-LinkExpanding 1.0" }))).toBe(true);
+    expect(isSharePage(req("/s/AbC123", { accept: "*/*", "user-agent": "Wget/1.25.0" }))).toBe(false);
+    expect(isSharePage(req("/s/AbC123", { accept: "*/*", "user-agent": "curl/8.7.1" }))).toBe(false);
+    expect(isSharePage(req("/s/AbC123/a.txt", browser))).toBe(false); // a direct link downloads in browsers too
+    expect(isSharePage(req("/s/AbC123", browser, "POST"))).toBe(false);
+    expect(isSharePage(req("/i/AbC123", browser))).toBe(false);
+  });
+
+  it("are rewritten onto the API", () => {
+    const path = (p: string) => new URL(resolveAlias(req(p)).url).pathname;
+    expect(path("/install.sh")).toBe("/api/cli/install.sh");
+    expect(path("/s/AbC123")).toBe("/api/public/shares/AbC123/direct");
+    expect(path("/s/AbC123/")).toBe("/api/public/shares/AbC123/direct");
+    expect(path("/s/AbC123/a%20b.txt")).toBe("/api/public/shares/AbC123/direct/a%20b.txt");
+    expect(path("/s/AbC123/a/b")).toBe("/s/AbC123/a/b");
+    expect(path("/api/info")).toBe("/api/info");
+    expect(new URL(resolveAlias(req("/s/AbC123?access_token=t")).url).search).toBe("?access_token=t");
+  });
+
+  it("redirect wget and curl to the file, count it, and list project shares", async () => {
+    const db = new NodeD1(":memory:");
+    await migrate(db);
+    const secret = "unit-secret";
+    const insert = (sql: string, ...v: unknown[]) => db.prepare(sql).bind(...v);
+    const blob = (id: string, name: string) =>
+      insert(
+        "INSERT INTO blobs (id, project_id, storage_id, object_key, name, size, content_type, status, created_at, updated_at) VALUES (?, 'p', 'st', ?, ?, 5, 'text/plain', 'active', 1, 1)",
+        id,
+        `p/${id}`,
+        name,
+      );
+    const share = (id: string, blobId: string | null, o: { max?: number; expires?: number; password?: boolean } = {}) =>
+      insert(
+        "INSERT INTO shares (id, token, project_id, blob_id, creator_id, max_downloads, expires_at, password_hash, created_at) VALUES (?, ?, 'p', ?, 'u', ?, ?, ?, 1)",
+        id,
+        `tok${id}`,
+        blobId,
+        o.max ?? null,
+        o.expires ?? null,
+        o.password ? "hash" : null,
+      );
+    await db.batch([
+      insert(
+        "INSERT INTO storages (id, name, provider, endpoint, region, bucket, access_key_id, secret_access_key, created_at, updated_at) VALUES ('st', 'local', 'rustfs', 'http://s3.test:9000', 'us-east-1', 'files', 'AK', ?, 1, 1)",
+        await encrypt(secret, "SK"),
+      ),
+      insert("INSERT INTO users (id, username, created_at) VALUES ('u', 'alice', 1)"),
+      insert("INSERT INTO projects (id, name, owner_id, storage_id, blob_count, created_at, updated_at) VALUES ('p', 'demo', 'u', 'st', 2, 1, 1)"),
+      blob("b1", "你好 a.txt"),
+      blob("b2", "b.bin"),
+      share("one", "b1", { max: 1 }),
+      share("all", null),
+      share("old", "b1", { expires: Date.now() - 1000 }),
+      share("pw", "b2", { password: true }),
+    ]);
+    const app = createApp();
+    const env = { DB: db, APP_SECRET: secret, PUBLIC_URL: "https://files.example.com" };
+    const ctx = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} };
+    const get = (path: string, headers: Record<string, string> = { accept: "*/*" }, method = "GET") =>
+      app.fetch(resolveAlias(req(path, headers, method)), env, ctx as never);
+
+    const head = await get("/s/tokone", { accept: "*/*" }, "HEAD");
+    expect([head.status, head.headers.get("content-length")]).toEqual([200, "5"]);
+    expect(head.headers.get("content-disposition")).toContain("UTF-8''%E4%BD%A0%E5%A5%BD%20a.txt");
+
+    const r1 = await get("/s/tokone");
+    expect(r1.status).toBe(302);
+    const loc = new URL(r1.headers.get("location")!);
+    expect(`${loc.origin}${loc.pathname}`).toBe("http://s3.test:9000/files/p/b1");
+    expect(loc.searchParams.get("response-content-disposition")).toContain("%E4%BD%A0%E5%A5%BD%20a.txt");
+    // max_downloads 1: used up, by name too.
+    const r2 = await get(`/s/tokone/${encodeURIComponent("你好 a.txt")}`);
+    expect([r2.status, r2.headers.get("content-type"), await r2.text()]).toEqual([
+      410,
+      "text/plain; charset=UTF-8",
+      "this share reached its download limit (share_exhausted)\n",
+    ]);
+
+    const list = await get("/s/tokall");
+    expect(await list.text()).toBe(
+      "https://files.example.com/s/tokall/b.bin\nhttps://files.example.com/s/tokall/%E4%BD%A0%E5%A5%BD%20a.txt\n",
+    );
+    expect((await get("/s/tokall/b.bin")).headers.get("location")).toContain("/files/p/b2?");
+    expect((await get("/s/tokall/nope.txt")).status).toBe(404);
+    expect((await get("/s/tokold")).status).toBe(410);
+    expect(await (await get("/s/missing")).text()).toBe("share not found (not_found)\n");
+    // Browsers that hit an error on a direct link land on the share page; previews never download.
+    const page = await get("/s/tokall/nope.txt", browser);
+    expect([page.status, page.headers.get("location")]).toEqual([302, "https://files.example.com/s/tokall"]);
+    expect((await get("/s/tokall/b.bin", { accept: "*/*", "user-agent": "Discordbot/2.0" })).headers.get("location")).toBe(
+      "https://files.example.com/s/tokall",
+    );
+    // Password-protected shares take the access token from …/unlock (query or header).
+    const locked = await get("/s/tokpw");
+    expect([locked.status, await locked.text()]).toEqual([
+      403,
+      "this share is password protected; open https://files.example.com/s/tokpw in a browser (invalid_password)\n",
+    ]);
+    const access = await signJwt(secret, { sub: "pw", typ: "share" }, 60);
+    expect((await get(`/s/tokpw?access_token=${access}`)).status).toBe(302);
+    expect((await get("/s/tokpw/b.bin", { accept: "*/*", "x-share-access": access })).status).toBe(302);
+    const counts = await all<{ id: string; download_count: number }>(db, "SELECT id, download_count FROM shares ORDER BY id");
+    expect(counts).toEqual([
+      { id: "all", download_count: 1 },
+      { id: "old", download_count: 0 },
+      { id: "one", download_count: 1 },
+      { id: "pw", download_count: 2 },
+    ]);
+    db.close();
   });
 });

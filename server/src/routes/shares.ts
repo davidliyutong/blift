@@ -6,9 +6,10 @@ import { all, now, one, run } from "../db";
 import type { AppEnv, Ctx } from "../env";
 import { hashPassword, verifyPassword } from "../lib/crypto";
 import { ApiError, badRequest, forbidden, notFound } from "../lib/errors";
-import { body, int, publicOrigin, str } from "../lib/http";
+import { body, int, isLinkPreview, publicOrigin, str, wantsPage } from "../lib/http";
 import { newId, newShareToken } from "../lib/ids";
 import { signJwt, verifyJwt } from "../lib/jwt";
+import { contentDisposition } from "../lib/s3";
 import { listBlobs, loadProject, type BlobRow } from "../services/projects";
 import { addStats } from "../services/stats";
 import { storageFor } from "../services/storage";
@@ -46,6 +47,9 @@ const SHARE_SELECT = `
   LEFT JOIN blobs b ON b.id = s.blob_id
   LEFT JOIN users u ON u.id = s.creator_id`;
 
+/** A file's direct link (/s/<token>/<name>): `wget <link>` saves it under its own name. */
+export const directLink = (origin: string, token: string, name: string) => `${origin}/s/${token}/${encodeURIComponent(name)}`;
+
 const toShare = (c: Ctx, s: ShareRow) => ({
   id: s.id,
   token: s.token,
@@ -54,6 +58,7 @@ const toShare = (c: Ctx, s: ShareRow) => ({
   project_name: s.project_name,
   blob_id: s.blob_id,
   blob_name: s.blob_name,
+  download_url: s.blob_id && s.blob_name ? directLink(publicOrigin(c), s.token, s.blob_name) : null,
   has_password: !!s.password_hash,
   expires_at: s.expires_at,
   max_downloads: s.max_downloads,
@@ -200,16 +205,18 @@ publicShares.post("/:token/unlock", async (c) => {
   return c.json({ access_token: access });
 });
 
-publicShares.get("/:token/blobs/:blobId/download", async (c) => {
-  const s = await loadShare(c, c.req.param("token"));
-  if (!(await isUnlocked(c, s))) throw new ApiError(403, "invalid_password", "password required");
-  const blob = await one<BlobRow>(
-    c.env.DB,
-    "SELECT * FROM blobs WHERE id = ? AND project_id = ? AND status = 'active'",
-    c.req.param("blobId"),
-    s.project_id,
-  );
+/** The shared file a download asks for, by id or by name; 404 when the share does not cover it. */
+async function shareBlob(c: Ctx, s: ShareRow, by: { id: string } | { name: string }): Promise<BlobRow> {
+  const blob =
+    "id" in by
+      ? await one<BlobRow>(c.env.DB, "SELECT * FROM blobs WHERE id = ? AND project_id = ? AND status = 'active'", by.id, s.project_id)
+      : await one<BlobRow>(c.env.DB, "SELECT * FROM blobs WHERE project_id = ? AND name = ? AND status = 'active'", s.project_id, by.name);
   if (!blob || (s.blob_id && s.blob_id !== blob.id)) throw notFound("file");
+  return blob;
+}
+
+/** Counts one download of a shared file and returns a presigned URL for it. */
+async function shareDownload(c: Ctx, s: ShareRow, blob: BlobRow): Promise<string> {
   // Count first; the WHERE clause enforces max_downloads atomically.
   const ok = await run(
     c.env.DB,
@@ -223,6 +230,59 @@ publicShares.get("/:token/blobs/:blobId/download", async (c) => {
   c.set("statsUser", s.owner_id);
   addStats(c, { downloads: 1, download_bytes: blob.size });
   c.executionCtx.waitUntil(run(c.env.DB, "UPDATE blobs SET download_count = download_count + 1 WHERE id = ?", blob.id));
+  return url;
+}
+
+publicShares.get("/:token/blobs/:blobId/download", async (c) => {
+  const s = await loadShare(c, c.req.param("token"));
+  if (!(await isUnlocked(c, s))) throw new ApiError(403, "invalid_password", "password required");
+  const url = await shareDownload(c, s, await shareBlob(c, s, { id: c.req.param("blobId") }));
   if (c.req.query("redirect") === "1") return c.redirect(url, 302);
   return c.json({ url, expires_at: now() + DOWNLOAD_TTL * 1000 });
+});
+
+// ---- Direct links for wget, curl and scripts: /s/<token> and /s/<token>/<name> (aliases, see
+// app.ts). A file redirects to a presigned URL, counted like any share download; a project share
+// without a name lists one direct link per file. Answers are text/plain, errors too.
+
+/** Direct links a project share lists at /s/<token> (its first files by name). */
+export const DIRECT_LIST_LIMIT = 1000;
+
+publicShares.get("/:token/direct/:name?", async (c) => {
+  const token = c.req.param("token");
+  const name = c.req.param("name");
+  const origin = publicOrigin(c);
+  const page = `${origin}/s/${encodeURIComponent(token)}`;
+  // A chat app previewing /s/<token>/<name> gets the share page rather than using up a download.
+  if (isLinkPreview(c.req.raw)) return c.redirect(page, 302);
+  try {
+    const s = await loadShare(c, token);
+    if (!(await isUnlocked(c, s)))
+      throw new ApiError(403, "invalid_password", `this share is password protected; open ${page} in a browser`);
+    if (name === undefined && !s.blob_id) {
+      const files = await listBlobs(
+        c.env.DB,
+        { id: s.project_id, blob_count: s.project_blob_count },
+        { sort: "name", order: "asc", limit: DIRECT_LIST_LIMIT },
+      );
+      const access = c.req.query("access_token");
+      const suffix = access ? `?access_token=${encodeURIComponent(access)}` : "";
+      c.executionCtx.waitUntil(run(c.env.DB, "UPDATE shares SET view_count = view_count + 1 WHERE id = ?", s.id));
+      return c.text(files.rows.map((b) => `${directLink(origin, s.token, b.name)}${suffix}\n`).join(""));
+    }
+    const blob = await shareBlob(c, s, name === undefined ? { id: s.blob_id! } : { name: name.normalize("NFC") });
+    // HEAD describes the file without counting a download (wget asks first with some options).
+    if (c.req.method === "HEAD")
+      return c.body(null, 200, {
+        "content-type": blob.content_type,
+        "content-length": String(blob.size),
+        "content-disposition": contentDisposition(blob.name),
+      });
+    return c.redirect(await shareDownload(c, s, blob), 302);
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;
+    // A browser that followed a direct link sees the problem (or the password prompt) on the page.
+    if (wantsPage(c.req.raw)) return c.redirect(page, 302);
+    return c.text(`${e.message} (${e.code})\n`, e.status as 404);
+  }
 });

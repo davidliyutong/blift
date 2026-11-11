@@ -84,6 +84,8 @@ export interface Share {
   project_name: string;
   blob_id: string | null;
   blob_name: string | null;
+  /** Direct link for wget/curl (/s/<token>/<name>); single-file shares only. */
+  download_url: string | null;
   has_password: boolean;
   expires_at: number | null;
   max_downloads: number | null;

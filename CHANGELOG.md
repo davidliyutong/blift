@@ -21,9 +21,18 @@ All notable changes are documented here. The format follows
   dialog always shows the backend picker, with each backend's location, and the project settings
   and `blift project info` show it too; `blift project create --storage` completes backends with
   their location. The signing-region field in the admin form is now called "S3 region".
+- Direct share links for scripts: `/s/<token>/<file name>` (`download_url` on shares, shown in the
+  share dialog, the share list and by `blift share create`) downloads the file, so plain
+  `wget <link>` saves it under its own name. On a project share's link, wget and curl get a
+  plain-text list of these links (`wget -i`). `blift share get` accepts direct links.
 
 ### Fixed
 
+- `wget` / `curl` on a share link (`/s/<token>`) saved the web page instead of the file. Clients
+  that do not ask for HTML now get a redirect to the file (counted as a download, within the
+  share's limits); browsers and chat link previews still get the page. Password-protected shares
+  answer 403 unless given an access token. **Cloudflare Workers:** add `"/s/*"` to
+  `run_worker_first` in your `server/wrangler.local.toml` before deploying.
 - `/install.sh` answered 500 on Node 26.
 
 ## [0.1.2] - 2026-11-07

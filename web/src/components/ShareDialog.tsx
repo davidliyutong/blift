@@ -57,6 +57,13 @@ export function ShareDialog({
           <span className="text-sm font-medium">{t("share.link")}</span>
           <ClipboardText text={created.share.url} size="base" />
         </div>
+        {created.share.download_url && !created.password && (
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-medium">{t("share.directLink")}</span>
+            <ClipboardText text={created.share.download_url} size="base" />
+            <p className="m-0 text-xs text-kumo-subtle">{t("share.directLinkHint")}</p>
+          </div>
+        )}
         {created.password && (
           <div className="flex flex-col gap-2">
             <span className="text-sm font-medium">{t("common.password")}</span>
