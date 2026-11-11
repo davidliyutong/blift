@@ -44,6 +44,8 @@ export interface Project {
   role: ProjectRole;
   storage_id: string;
   storage_name: string;
+  /** The backend's location label; "" when not set. */
+  storage_location: string;
   used_bytes: number;
   blob_count: number;
   /** The project accepts anonymous uploads at inbox_url. */
@@ -124,6 +126,8 @@ export interface StorageSummary {
   id: string;
   name: string;
   provider: StorageProvider;
+  /** Display label such as "Singapore"; "" when not set. */
+  location: string;
   is_default: boolean;
 }
 
@@ -197,11 +201,14 @@ export interface AdminStorage {
   name: string;
   provider: StorageProvider;
   endpoint: string;
+  /** S3 signing region ("auto", "us-east-1"). */
   region: string;
   bucket: string;
   access_key_id: string;
   path_style: boolean;
   prefix: string;
+  /** Display label for users; "" when not set. */
+  location: string;
   is_default: boolean;
   created_at: number;
   project_count: number;
@@ -219,6 +226,7 @@ export interface StorageInput {
   secret_access_key?: string;
   path_style: boolean;
   prefix: string;
+  location: string;
   is_default: boolean;
 }
 

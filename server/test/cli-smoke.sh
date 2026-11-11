@@ -14,7 +14,7 @@ j() { curl -sf -b "$JAR" -c "$JAR" -H 'content-type: application/json' "$@"; }
 
 # Admin bootstrap + storage through the API (the web UI does the same).
 j -X POST "$BASE/api/setup" -d "{\"secret\":\"$BOOTSTRAP_SECRET\",\"username\":\"admin\",\"password\":\"password123\"}" >/dev/null
-j -X POST "$BASE/api/admin/storages" -d "{\"name\":\"local\",\"provider\":\"rustfs\",\"endpoint\":\"$S3_ENDPOINT\",\"region\":\"us-east-1\",\"bucket\":\"$S3_BUCKET\",\"access_key_id\":\"$S3_ACCESS_KEY\",\"secret_access_key\":\"$S3_SECRET_KEY\",\"prefix\":\"cli\"}" >/dev/null
+j -X POST "$BASE/api/admin/storages" -d "{\"name\":\"local\",\"provider\":\"rustfs\",\"endpoint\":\"$S3_ENDPOINT\",\"region\":\"us-east-1\",\"bucket\":\"$S3_BUCKET\",\"access_key_id\":\"$S3_ACCESS_KEY\",\"secret_access_key\":\"$S3_SECRET_KEY\",\"prefix\":\"cli\",\"location\":\"Singapore\"}" >/dev/null
 ok "bootstrap + storage"
 
 # Device login: run the CLI, approve the printed code with the admin's browser session.
@@ -38,7 +38,8 @@ ok "blift login with BLIFT_API_KEY / --api-key (single use)"
 
 "$BLIFT" project create demo -d "cli smoke" >/dev/null
 "$BLIFT" project ls | grep -q demo || fail "project ls"
-ok "project create / ls"
+"$BLIFT" project info demo | grep -q "local · Singapore" || fail "project info storage location"
+ok "project create / ls / info"
 
 mkdir -p "$WORK/up" "$WORK/down" "$WORK/shared"
 printf 'hello from the cli\n' >"$WORK/up/hello.txt"
@@ -65,7 +66,8 @@ comp ls "" | grep -q '^demo	' || fail "complete projects: $(comp ls "")"
 comp rm demo big.bin "" | grep -q '^big.bin' && fail "complete repeats a file already given"
 comp rm demo big.bin "" | grep -q '^greeting.txt' || fail "complete other files"
 [ "$(comp ls demo --sort "" | cut -f1 | tr '\n' ' ')" = "name size time " ] || fail "complete --sort"
-ok "shell completion: projects, files by prefix, flags"
+[ "$(comp project create x --storage "")" = "local	Singapore (rustfs)" ] || fail "complete --storage: $(comp project create x --storage "")"
+ok "shell completion: projects, files by prefix, flags, storages"
 
 "$BLIFT" ls demo --limit 1 2>"$WORK/ls.err" | grep -c 'greeting.txt\|big.bin' | grep -qx 1 || fail "ls --limit"
 grep -q "showing 1 of 2" "$WORK/ls.err" || fail "ls --limit hint: $(cat "$WORK/ls.err")"

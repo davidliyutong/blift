@@ -210,19 +210,33 @@ const storageCfg = {
   secret_access_key: env("S3_SECRET_KEY"),
   path_style: true,
   prefix: "smoke",
+  location: " Singapore ",
 };
 const test = await api("POST", "/api/admin/storages/test", storageCfg);
 assert.equal(test.ok, true, `storage test failed: ${test.error}`);
 const storage = await api("POST", "/api/admin/storages", storageCfg, { expect: 201 });
 assert.equal(storage.is_default, true);
 assert.equal(storage.prefix, "smoke/");
+assert.equal(storage.location, "Singapore");
+assert.deepEqual((await api("GET", "/api/storages")).storages.map((s) => [s.id, s.location]), [[storage.id, "Singapore"]]);
+assert.equal(await errCode(api("PATCH", `/api/admin/storages/${storage.id}`, { location: "x".repeat(65) }, { expect: 400 })), "bad_request");
 const cors = await api("POST", `/api/admin/storages/${storage.id}/cors`, {});
-step(`storage backend (test ${test.latency_ms} ms, CORS ${cors.ok ? "applied" : `not supported: ${cors.error}`})`);
+step(`storage backend (test ${test.latency_ms} ms, CORS ${cors.ok ? "applied" : `not supported: ${cors.error}`}, location label)`);
 
 const project = await api("POST", "/api/projects", { name: "demo", description: "smoke" }, { expect: 201 });
+assert.deepEqual([project.storage_id, project.storage_name, project.storage_location], [storage.id, "local", "Singapore"]);
+assert.equal(await errCode(api("POST", "/api/projects", { name: "nowhere", storage_id: "nope" }, { expect: 404 })), "not_found");
+// A second backend: users pick it by id; the default one is listed first.
+const storage2 = await api("POST", "/api/admin/storages", { ...storageCfg, name: "second", prefix: "smoke2", location: "US West" }, { expect: 201 });
+assert.deepEqual(
+  (await api("GET", "/api/storages")).storages.map((s) => [s.name, s.location, s.is_default]),
+  [["local", "Singapore", true], ["second", "US West", false]],
+);
+const elsewhere = await api("POST", "/api/projects", { name: "elsewhere", storage_id: storage2.id }, { expect: 201 });
+assert.deepEqual([elsewhere.storage_id, elsewhere.storage_name, elsewhere.storage_location], [storage2.id, "second", "US West"]);
 assert.equal(await errCode(api("POST", "/api/projects", { name: "DEMO" }, { expect: 409 })), "name_taken");
 assert.equal(await errCode(api("POST", "/api/projects", { name: "bad/name" }, { expect: 400 })), "bad_request");
-step("project create + name rules");
+step("project create (default or chosen backend, with its location) + name rules");
 
 const small = Buffer.from("hello blift — 你好\n");
 const b1 = await upload(project.id, "hello 你好.txt", small);
@@ -349,7 +363,7 @@ const tok = await api("POST", "/api/cli/login/poll", { device_code: dev.device_c
 assert.match(tok.token, /^blift_/);
 assert.equal(await errCode(api("POST", "/api/cli/login/poll", { device_code: dev.device_code }, { auth: null, expect: 400 })), "expired_token");
 const viaToken = await api("GET", "/api/projects", undefined, { auth: tok.token });
-assert.deepEqual(viaToken.projects.map((p) => p.name).sort(), ["demo", "listing"]);
+assert.deepEqual(viaToken.projects.map((p) => p.name).sort(), ["demo", "elsewhere", "listing"]);
 step("CLI device login (pending → approved → token, single use)");
 
 // API keys: unattended CLI logins. Single use, unlimited, linked sessions, revocation.
@@ -465,6 +479,7 @@ step("an API-key sign-in without expiry survives GC until revoked");
 
 await api("DELETE", `/api/projects/${lp.id}`, undefined, { expect: 204 }); // releases its usage at once
 await api("DELETE", `/api/projects/${ib.id}`, undefined, { expect: 204 });
+await api("DELETE", `/api/projects/${elsewhere.id}`, undefined, { expect: 204 });
 const inboxBytes = 2 * report.length + big.length;
 const stats = await api("GET", "/api/admin/stats?days=7");
 assert.equal(stats.series.length, 7);

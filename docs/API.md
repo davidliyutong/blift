@@ -68,6 +68,7 @@ type Project = {
   owner: UserRef;
   role: "owner" | "editor" | "viewer";   // caller's role
   storage_id: string; storage_name: string;
+  storage_location: string;              // the backend's location label ("" when not set)
   used_bytes: number; blob_count: number;
   inbox_enabled: boolean;                // accepts anonymous uploads (see "Inbox")
   inbox_url: string | null;              // <public origin>/i/<token>; only for editors and owners
@@ -214,7 +215,10 @@ Web-side (authenticated):
 
 ## Storages (read-only list for users)
 
-`GET /api/storages` → `{ "storages": [{ "id", "name", "provider", "is_default" }] }`
+`GET /api/storages` → `{ "storages": [{ "id", "name", "provider", "location", "is_default" }] }`
+
+`location` is a free-text label set by the admin, such as `Singapore` or `US West` (`""` when not
+set), shown when users pick the backend of a new project (`storage_id` in `POST /api/projects`).
 
 ## Projects
 
@@ -367,7 +371,9 @@ type AdminUser = User & { status: "active" | "disabled"; quota_override: number 
 
 type AdminStorage = { id, name, provider: "s3"|"r2"|"b2"|"rustfs"|"minio"|"other",
   endpoint, region, bucket, access_key_id, path_style: boolean, prefix: string,
-  is_default: boolean, created_at, project_count: number, used_bytes: number };
+  location: string, is_default: boolean, created_at, project_count: number, used_bytes: number };
+// region: the S3 signing region ("auto" for R2, "us-east-1" for MinIO/RustFS…).
+// location: optional display label for users (≤ 64 chars, "" = none), e.g. "Singapore".
 
 type Settings = {
   site: { name: string; default_quota_bytes: number /* -1 unlimited */ };

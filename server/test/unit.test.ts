@@ -266,6 +266,8 @@ describe("migrations", () => {
     expect(tables.map((t) => t.name)).toEqual(
       expect.arrayContaining(["users", "sessions", "projects", "blobs", "shares", "storages", "stats_daily", "_migrations"]),
     );
+    const storageCols = await all<{ name: string; dflt_value: string }>(db, "PRAGMA table_info(storages)");
+    expect(storageCols.find((c) => c.name === "location")?.dflt_value).toBe("''");
     db.close();
   });
 });

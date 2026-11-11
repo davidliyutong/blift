@@ -9,12 +9,15 @@ export type StorageRow = {
   name: string;
   provider: string;
   endpoint: string;
+  /** S3 signing region ("auto", "us-east-1"). */
   region: string;
   bucket: string;
   access_key_id: string;
   secret_access_key: string; // encrypted
   path_style: number;
   prefix: string;
+  /** Display label for users ("Singapore"); "" when not set. */
+  location: string;
   is_default: number;
   created_at: number;
   updated_at: number;

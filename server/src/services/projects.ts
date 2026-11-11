@@ -25,12 +25,14 @@ export type ProjectRow = {
   owner_username: string | null;
   owner_display_name: string | null;
   storage_name: string | null;
+  storage_location: string | null;
   role: MemberRole;
 };
 
 /** SELECT list producing a ProjectRow; bind the caller's user id first. */
 export const PROJECT_SELECT = `
-  SELECT p.*, m.role AS role, o.username AS owner_username, o.display_name AS owner_display_name, st.name AS storage_name
+  SELECT p.*, m.role AS role, o.username AS owner_username, o.display_name AS owner_display_name,
+         st.name AS storage_name, st.location AS storage_location
   FROM projects p
   LEFT JOIN project_members m ON m.project_id = p.id AND m.user_id = ?
   LEFT JOIN users o ON o.id = p.owner_id
@@ -46,6 +48,7 @@ export function toProject(c: Ctx, p: ProjectRow) {
     role: p.role,
     storage_id: p.storage_id,
     storage_name: p.storage_name ?? "",
+    storage_location: p.storage_location ?? "",
     used_bytes: p.used_bytes,
     blob_count: p.blob_count,
     inbox_enabled: !!p.inbox_token,

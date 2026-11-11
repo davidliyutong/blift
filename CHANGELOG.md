@@ -17,6 +17,10 @@ All notable changes are documented here. The format follows
   account (off by default; the link can be reset). Uploaders see nothing in the project, a taken
   name gets a number instead of replacing a file, and usage counts against the owner's quota.
   Inbox uploads are labelled in the file list.
+- Storage backends have an optional location label ("Singapore", "US West"). The new-project
+  dialog always shows the backend picker, with each backend's location, and the project settings
+  and `blift project info` show it too; `blift project create --storage` completes backends with
+  their location. The signing-region field in the admin form is now called "S3 region".
 
 ### Fixed
 
