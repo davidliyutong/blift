@@ -113,6 +113,13 @@ path), make the same change in your copy. For a custom domain add
 `workers_dev = true` (wrangler otherwise turns the `*.workers.dev` URL off), and set `PUBLIC_URL`
 under `[vars]` when the Worker has more than one hostname.
 
+To deploy automatically from GitHub, connect the repository under the Worker's Settings → Builds
+([Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/)) with build command
+`pnpm install --frozen-lockfile && make cf-config`, deploy command `make deploy`, and the build
+variables `CF_D1_ID` (the D1 database id) plus, optionally, `CF_DOMAIN` (custom domain) and
+`PUBLIC_URL`. `make cf-config` writes `server/wrangler.local.toml` from the template on every
+build, so template changes are picked up without manual edits.
+
 ### Local development
 
 ```sh

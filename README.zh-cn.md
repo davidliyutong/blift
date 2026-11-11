@@ -95,6 +95,12 @@ make deploy         # 构建前端并部署 API + 静态资源 + GC 定时任务
 `routes = [{ pattern = "files.example.com", custom_domain = true }]`，并同时写 `workers_dev = true`
 （否则 wrangler 会关闭 `*.workers.dev` 地址）；Worker 有多个域名时，在 `[vars]` 中设置 `PUBLIC_URL` 作为规范地址。
 
+从 GitHub 自动部署：在 Worker 的 Settings → Builds
+（[Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/)）里连接仓库，构建命令填
+`pnpm install --frozen-lockfile && make cf-config`，部署命令填 `make deploy`，并设置构建变量 `CF_D1_ID`（D1 数据库 ID），
+以及可选的 `CF_DOMAIN`（自定义域名）和 `PUBLIC_URL`。`make cf-config` 每次构建都从模板生成
+`server/wrangler.local.toml`，模板的变化会自动生效，无需手动修改。
+
 ### 本地开发
 
 ```sh

@@ -12,7 +12,7 @@ WRANGLER_CONFIG = $(if $(wildcard server/wrangler.local.toml),wrangler.local.tom
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev dev-server dev-web dev-worker build build-web build-server cli cli-all cli-dist \
-        test test-server test-cli typecheck smoke docker docker-up cf-init cf-secrets deploy clean
+        test test-server test-cli typecheck smoke docker docker-up cf-init cf-config cf-secrets deploy clean
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*## "} /^[a-zA-Z_-]+:.*## /{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -90,6 +90,9 @@ cf-init: ## Create the D1 database and write its id into server/wrangler.local.t
 	  test -n "$$id" || { echo "could not create D1 database"; exit 1; }; \
 	  sed -i.bak -E "s/^database_id = .*/database_id = \"$$id\"/" server/wrangler.local.toml && rm server/wrangler.local.toml.bak; \
 	  echo "database_id = $$id written to server/wrangler.local.toml"
+
+cf-config: ## Write server/wrangler.local.toml from CF_D1_ID [CF_DOMAIN] [PUBLIC_URL] (for CI / Workers Builds)
+	@scripts/cf-config.sh
 
 cf-secrets: ## Generate APP_SECRET and BOOTSTRAP_SECRET and store them as Worker secrets
 	@openssl rand -base64 48 | tr -d '\n' | $(WRANGLER) secret put APP_SECRET --config $(WRANGLER_CONFIG)
