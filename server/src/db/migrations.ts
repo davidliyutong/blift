@@ -197,6 +197,14 @@ ALTER TABLE blobs ADD COLUMN via_inbox INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE api_keys ADD COLUMN session_ttl INTEGER DEFAULT 7776000;
 `,
   },
+  {
+    // A storage backend's location: a free-text label for users ("Singapore", "US West"), unlike
+    // `region`, which is the S3 signing region ("auto", "us-east-1").
+    name: "0005_storage_location",
+    sql: `
+ALTER TABLE storages ADD COLUMN location TEXT NOT NULL DEFAULT '';
+`,
+  },
 ];
 
 const split = (sql: string) =>

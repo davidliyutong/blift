@@ -7,6 +7,7 @@
 // Expects a fresh database (it performs the one-off bootstrap). `make smoke` sets it all up.
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import http from "node:http";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 
@@ -154,6 +155,10 @@ async function oidcLogin(redirect = "/projects") {
   return { location: cb.headers.get("location"), session };
 }
 
+/** A share link fetched like wget does (Accept: *\/*), or with other headers; redirects not followed. */
+const viaLink = (path, headers = { accept: "*/*", "user-agent": "Wget/1.25.0" }, method = "GET") =>
+  fetch(BASE + path, { method, headers, redirect: "manual" });
+
 async function fetchBytes(url) {
   const r = await fetch(url);
   assert.equal(r.status, 200, `GET ${url} → ${r.status}`);
@@ -210,19 +215,33 @@ const storageCfg = {
   secret_access_key: env("S3_SECRET_KEY"),
   path_style: true,
   prefix: "smoke",
+  location: " Singapore ",
 };
 const test = await api("POST", "/api/admin/storages/test", storageCfg);
 assert.equal(test.ok, true, `storage test failed: ${test.error}`);
 const storage = await api("POST", "/api/admin/storages", storageCfg, { expect: 201 });
 assert.equal(storage.is_default, true);
 assert.equal(storage.prefix, "smoke/");
+assert.equal(storage.location, "Singapore");
+assert.deepEqual((await api("GET", "/api/storages")).storages.map((s) => [s.id, s.location]), [[storage.id, "Singapore"]]);
+assert.equal(await errCode(api("PATCH", `/api/admin/storages/${storage.id}`, { location: "x".repeat(65) }, { expect: 400 })), "bad_request");
 const cors = await api("POST", `/api/admin/storages/${storage.id}/cors`, {});
-step(`storage backend (test ${test.latency_ms} ms, CORS ${cors.ok ? "applied" : `not supported: ${cors.error}`})`);
+step(`storage backend (test ${test.latency_ms} ms, CORS ${cors.ok ? "applied" : `not supported: ${cors.error}`}, location label)`);
 
 const project = await api("POST", "/api/projects", { name: "demo", description: "smoke" }, { expect: 201 });
+assert.deepEqual([project.storage_id, project.storage_name, project.storage_location], [storage.id, "local", "Singapore"]);
+assert.equal(await errCode(api("POST", "/api/projects", { name: "nowhere", storage_id: "nope" }, { expect: 404 })), "not_found");
+// A second backend: users pick it by id; the default one is listed first.
+const storage2 = await api("POST", "/api/admin/storages", { ...storageCfg, name: "second", prefix: "smoke2", location: "US West" }, { expect: 201 });
+assert.deepEqual(
+  (await api("GET", "/api/storages")).storages.map((s) => [s.name, s.location, s.is_default]),
+  [["local", "Singapore", true], ["second", "US West", false]],
+);
+const elsewhere = await api("POST", "/api/projects", { name: "elsewhere", storage_id: storage2.id }, { expect: 201 });
+assert.deepEqual([elsewhere.storage_id, elsewhere.storage_name, elsewhere.storage_location], [storage2.id, "second", "US West"]);
 assert.equal(await errCode(api("POST", "/api/projects", { name: "DEMO" }, { expect: 409 })), "name_taken");
 assert.equal(await errCode(api("POST", "/api/projects", { name: "bad/name" }, { expect: 400 })), "bad_request");
-step("project create + name rules");
+step("project create (default or chosen backend, with its location) + name rules");
 
 const small = Buffer.from("hello blift — 你好\n");
 const b1 = await upload(project.id, "hello 你好.txt", small);
@@ -259,6 +278,32 @@ const pd1 = await api("GET", `/api/public/shares/${share1.token}/blobs/${b1v2.id
 assert.equal((await fetchBytes(pd1.url)).data.toString(), "version 2");
 step("overwrite upload; share follows the new version");
 
+// Share links for wget and curl: /s/<token> and /s/<token>/<name> redirect to the file.
+assert.equal(share1.download_url, `${BASE}/s/${share1.token}/${encodeURIComponent("hello 你好.txt")}`);
+for (const path of [`/s/${share1.token}`, new URL(share1.download_url).pathname]) {
+  const r = await viaLink(path);
+  assert.equal(r.status, 302, `${path} → ${r.status} ${await r.text()}`);
+  const got = await fetchBytes(r.headers.get("location"));
+  assert.equal(got.data.toString(), "version 2");
+  assert.match(got.disposition ?? "", /filename\*=UTF-8''hello%20%E4%BD%A0%E5%A5%BD\.txt/);
+}
+// Browsers still get the web page (when this server has one: web/dist is not built in CI).
+const asPage = await viaLink(`/s/${share1.token}`, { accept: "text/html,application/xhtml+xml,*/*;q=0.8" });
+const hasWeb = existsSync(new URL("../../web/dist/index.html", import.meta.url));
+assert.equal(asPage.status, hasWeb ? 200 : 404);
+if (hasWeb) assert.match(`${asPage.headers.get("content-type")} ${await asPage.text()}`, /^text\/html.*<div id="root">/s);
+// HEAD describes the file without counting; the limit holds; errors are plain text.
+const once = await api("POST", "/api/shares", { project_id: project.id, blob_id: b1v2.id, max_downloads: 1 }, { expect: 201 });
+const onceHead = await viaLink(`/s/${once.token}`, undefined, "HEAD");
+assert.deepEqual([onceHead.status, onceHead.headers.get("content-length")], [200, String(small2.length)]);
+assert.equal((await viaLink(`/s/${once.token}`)).status, 302);
+const onceGone = await viaLink(new URL(once.download_url).pathname);
+assert.deepEqual([onceGone.status, await onceGone.text()], [410, "this share reached its download limit (share_exhausted)\n"]);
+assert.equal((await viaLink(`/s/${once.token}/other.txt`)).status, 410);
+assert.equal((await viaLink("/s/nope")).status, 404);
+assert.equal((await api("GET", `/api/shares?project_id=${project.id}`)).shares.find((s) => s.id === once.id).download_count, 1);
+step(`share links for wget/curl: 302 to the file (by token and by name), HEAD, limit, ${hasWeb ? "HTML page for browsers" : "no web/dist"}`);
+
 // Listing a larger project: keyset cursors, prefix and exact-name lookups, paged public shares.
 const lp = await api("POST", "/api/projects", { name: "listing" }, { expect: 201 });
 const names = ["Alpha.txt", "alpha-2.txt", "beta.txt", "Gamma.log", "gamma.txt", "delta 1.txt", "delta 2.txt"];
@@ -290,7 +335,16 @@ assert.equal(pubPage1.blobs.length, 4);
 const pubPage2 = await api("GET", `/api/public/shares/${lshare.token}?limit=4&cursor=${encodeURIComponent(pubPage1.next_cursor)}`, undefined, { auth: null });
 assert.equal(pubPage2.next_cursor, null);
 assert.deepEqual([...pubPage1.blobs, ...pubPage2.blobs].map((b) => b.name), ordered);
-step(`listing: cursor pages, prefix, exact names, paged public share (${names.length} files)`);
+assert.equal(lshare.download_url, null);
+const linkList = await viaLink(`/s/${lshare.token}`, { accept: "*/*", "user-agent": "curl/8.7.1" });
+assert.equal(linkList.status, 200);
+assert.match(linkList.headers.get("content-type") ?? "", /^text\/plain/);
+const links = (await linkList.text()).trim().split("\n");
+assert.deepEqual(links, ordered.map((n) => `${BASE}/s/${lshare.token}/${encodeURIComponent(n)}`));
+const viaList = await viaLink(new URL(links[ordered.indexOf("delta 2.txt")]).pathname);
+assert.equal((await fetchBytes(viaList.headers.get("location"))).data.toString(), "delta 2.txt");
+assert.equal((await viaLink(`/s/${lshare.token}/nope.txt`)).status, 404);
+step(`listing: cursor pages, prefix, exact names, paged public share (${names.length} files), text list of direct links`);
 
 const share2 = await api("POST", "/api/shares", { project_id: project.id, password: "s3cret", max_downloads: 1, expires_in: 3600 }, { expect: 201 });
 assert.equal(share2.has_password, true);
@@ -299,13 +353,19 @@ assert.equal(locked.share.locked, true);
 assert.equal(locked.blobs, undefined);
 assert.equal(await errCode(api("POST", `/api/public/shares/${share2.token}/unlock`, { password: "wrong" }, { auth: null, expect: 403 })), "invalid_password");
 assert.equal(await errCode(api("GET", `/api/public/shares/${share2.token}/blobs/${b2.id}/download`, undefined, { auth: null, expect: 403 })), "invalid_password");
+const lockedLink = await viaLink(`/s/${share2.token}/big.bin`);
+assert.equal(lockedLink.status, 403);
+assert.match(await lockedLink.text(), /password protected; open .*\/s\/\w+ in a browser \(invalid_password\)/);
 const { access_token } = await api("POST", `/api/public/shares/${share2.token}/unlock`, { password: "s3cret" }, { auth: null });
 const unlocked = await api("GET", `/api/public/shares/${share2.token}`, undefined, { auth: null, headers: { "x-share-access": access_token } });
 assert.equal(unlocked.blobs.length, 2);
+const unlockedList = await viaLink(`/s/${share2.token}?access_token=${access_token}`);
+assert.match(await unlockedList.text(), new RegExp(`/s/${share2.token}/big\\.bin\\?access_token=`));
 const r302 = await fetch(`${BASE}/api/public/shares/${share2.token}/blobs/${b2.id}/download?redirect=1&access_token=${access_token}`, { redirect: "manual" });
 assert.equal(r302.status, 302);
 assert.equal(await errCode(api("GET", `/api/public/shares/${share2.token}`, undefined, { auth: null, expect: 410 })), "share_exhausted");
-step("password share: locked → unlock → download → exhausted after max_downloads");
+assert.equal((await viaLink(`/s/${share2.token}/big.bin?access_token=${access_token}`)).status, 410);
+step("password share: locked → unlock → download → exhausted after max_downloads (API and direct links)");
 
 // OIDC: HS256 (no signing key in Authentik) and RS256 (signing key selected)
 const idp = await startIdp();
@@ -349,7 +409,7 @@ const tok = await api("POST", "/api/cli/login/poll", { device_code: dev.device_c
 assert.match(tok.token, /^blift_/);
 assert.equal(await errCode(api("POST", "/api/cli/login/poll", { device_code: dev.device_code }, { auth: null, expect: 400 })), "expired_token");
 const viaToken = await api("GET", "/api/projects", undefined, { auth: tok.token });
-assert.deepEqual(viaToken.projects.map((p) => p.name).sort(), ["demo", "listing"]);
+assert.deepEqual(viaToken.projects.map((p) => p.name).sort(), ["demo", "elsewhere", "listing"]);
 step("CLI device login (pending → approved → token, single use)");
 
 // API keys: unattended CLI logins. Single use, unlimited, linked sessions, revocation.
@@ -465,6 +525,7 @@ step("an API-key sign-in without expiry survives GC until revoked");
 
 await api("DELETE", `/api/projects/${lp.id}`, undefined, { expect: 204 }); // releases its usage at once
 await api("DELETE", `/api/projects/${ib.id}`, undefined, { expect: 204 });
+await api("DELETE", `/api/projects/${elsewhere.id}`, undefined, { expect: 204 });
 const inboxBytes = 2 * report.length + big.length;
 const stats = await api("GET", "/api/admin/stats?days=7");
 assert.equal(stats.series.length, 7);

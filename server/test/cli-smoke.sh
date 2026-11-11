@@ -14,7 +14,7 @@ j() { curl -sf -b "$JAR" -c "$JAR" -H 'content-type: application/json' "$@"; }
 
 # Admin bootstrap + storage through the API (the web UI does the same).
 j -X POST "$BASE/api/setup" -d "{\"secret\":\"$BOOTSTRAP_SECRET\",\"username\":\"admin\",\"password\":\"password123\"}" >/dev/null
-j -X POST "$BASE/api/admin/storages" -d "{\"name\":\"local\",\"provider\":\"rustfs\",\"endpoint\":\"$S3_ENDPOINT\",\"region\":\"us-east-1\",\"bucket\":\"$S3_BUCKET\",\"access_key_id\":\"$S3_ACCESS_KEY\",\"secret_access_key\":\"$S3_SECRET_KEY\",\"prefix\":\"cli\"}" >/dev/null
+j -X POST "$BASE/api/admin/storages" -d "{\"name\":\"local\",\"provider\":\"rustfs\",\"endpoint\":\"$S3_ENDPOINT\",\"region\":\"us-east-1\",\"bucket\":\"$S3_BUCKET\",\"access_key_id\":\"$S3_ACCESS_KEY\",\"secret_access_key\":\"$S3_SECRET_KEY\",\"prefix\":\"cli\",\"location\":\"Singapore\"}" >/dev/null
 ok "bootstrap + storage"
 
 # Device login: run the CLI, approve the printed code with the admin's browser session.
@@ -38,7 +38,8 @@ ok "blift login with BLIFT_API_KEY / --api-key (single use)"
 
 "$BLIFT" project create demo -d "cli smoke" >/dev/null
 "$BLIFT" project ls | grep -q demo || fail "project ls"
-ok "project create / ls"
+"$BLIFT" project info demo | grep -q "local · Singapore" || fail "project info storage location"
+ok "project create / ls / info"
 
 mkdir -p "$WORK/up" "$WORK/down" "$WORK/shared"
 printf 'hello from the cli\n' >"$WORK/up/hello.txt"
@@ -65,7 +66,8 @@ comp ls "" | grep -q '^demo	' || fail "complete projects: $(comp ls "")"
 comp rm demo big.bin "" | grep -q '^big.bin' && fail "complete repeats a file already given"
 comp rm demo big.bin "" | grep -q '^greeting.txt' || fail "complete other files"
 [ "$(comp ls demo --sort "" | cut -f1 | tr '\n' ' ')" = "name size time " ] || fail "complete --sort"
-ok "shell completion: projects, files by prefix, flags"
+[ "$(comp project create x --storage "")" = "local	Singapore (rustfs)" ] || fail "complete --storage: $(comp project create x --storage "")"
+ok "shell completion: projects, files by prefix, flags, storages"
 
 "$BLIFT" ls demo --limit 1 2>"$WORK/ls.err" | grep -c 'greeting.txt\|big.bin' | grep -qx 1 || fail "ls --limit"
 grep -q "showing 1 of 2" "$WORK/ls.err" || fail "ls --limit hint: $(cat "$WORK/ls.err")"
@@ -81,6 +83,23 @@ URL=$("$BLIFT" --json share create demo --password pw1234 --expires 1d | grep -o
 cmp "$WORK/up/big.bin" "$WORK/shared/big.bin" || fail "shared big.bin differs"
 "$BLIFT" share ls demo | grep -q pw1234 && fail "password leaked in share ls"
 ok "share create (password) + anonymous share get"
+
+# Direct links: plain curl and wget save the file under its own name; share get takes them too.
+"$BLIFT" share create demo greeting.txt >"$WORK/share.out" 2>"$WORK/share.err"
+DIRECT=$(grep -oE 'https?://[^ ]+/s/[0-9A-Za-z]+/greeting\.txt' "$WORK/share.err")
+[ -n "$DIRECT" ] || fail "share create prints no direct link: $(cat "$WORK/share.err")"
+SHARE=$(cat "$WORK/share.out")
+mkdir -p "$WORK/d1" "$WORK/d2" "$WORK/d3" "$WORK/d4"
+(cd "$WORK/d1" && curl -sfOJL "$SHARE") || fail "curl -OJL share link"
+(cd "$WORK/d2" && curl -sfOL "$DIRECT") || fail "curl -OL direct link"
+"$BLIFT" -q share get "$DIRECT" -o "$WORK/d3"
+for d in d1 d2 d3; do cmp "$WORK/up/hello.txt" "$WORK/$d/greeting.txt" || fail "direct download into $d"; done
+if command -v wget >/dev/null; then
+  (cd "$WORK/d4" && wget -q "$DIRECT") || fail "wget direct link"
+  cmp "$WORK/up/hello.txt" "$WORK/d4/greeting.txt" || fail "wget saved: $(ls "$WORK/d4")"
+fi
+curl -sf "$URL" >/dev/null && fail "password share downloaded without a password"
+ok "direct links: curl -OJL, curl -O, wget, share get"
 
 # Self-update through this server (latest release lookup + download relay); a copy is replaced.
 "$BLIFT" update --check >/dev/null || fail "update --check"

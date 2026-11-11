@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Badge, Banner, Button, Empty, Input, LayerCard, Meter, Select, Table } from "@cloudflare/kumo";
 import { FolderSimpleIcon, PlusIcon, WarningIcon } from "@phosphor-icons/react";
-import { api, type Project, type ProjectRole } from "@/api";
+import { api, type Project, type ProjectRole, type StorageSummary } from "@/api";
 import { useI18n } from "@/i18n";
 import { useAsync } from "@/lib/hooks";
 import { useUser } from "@/lib/session";
@@ -143,6 +143,9 @@ export function ProjectsPage() {
   );
 }
 
+/** "name · location (provider)", the location only when the admin set one. */
+const storageLabel = (s: StorageSummary) => `${s.location ? `${s.name} · ${s.location}` : s.name} (${s.provider})`;
+
 function CreateProjectDialog({
   open,
   onOpenChange,
@@ -204,14 +207,15 @@ function CreateProjectDialog({
         onChange={(e) => setDescription(e.target.value)}
         required={false}
       />
-      {list.length > 1 && (
+      {(storages.loading || list.length > 0) && (
         <Select
           label={t("projects.storage")}
-          hideLabel={false}
+          description={t("projects.storageHint")}
           className="w-full"
+          loading={storages.loading}
           value={selected}
           onValueChange={(v) => setStorageId(v as string)}
-          items={Object.fromEntries(list.map((s) => [s.id, `${s.name} (${s.provider})`]))}
+          items={Object.fromEntries(list.map((s) => [s.id, storageLabel(s)]))}
         />
       )}
     </FormDialog>

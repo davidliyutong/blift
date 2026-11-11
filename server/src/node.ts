@@ -5,7 +5,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { type Context, Hono } from "hono";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { createApp, resolveAlias } from "./app";
+import { createApp, isSharePage, resolveAlias } from "./app";
 import { migrate } from "./db/migrations";
 import { NodeD1 } from "./db/node-sqlite";
 import type { Bindings } from "./env";
@@ -62,6 +62,8 @@ const root = new Hono();
 const toApi = (c: Context) => api.fetch(resolveAlias(c.req.raw), env, ctx as never);
 root.all("/api/*", toApi);
 root.get("/install.sh", toApi);
+// Share links: browsers get the page (static files and SPA fallback below), wget and curl the file.
+root.get("/s/*", (c, next) => (isSharePage(c.req.raw) ? next() : toApi(c)));
 root.use(
   "/assets/*",
   serveStatic({ root: WEB_DIR, onFound: (_p, c) => c.header("cache-control", "public, max-age=31536000, immutable") }),

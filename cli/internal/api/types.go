@@ -24,15 +24,16 @@ type UserRef struct {
 }
 
 type Project struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	Owner       UserRef `json:"owner"`
-	Role        string  `json:"role"`
-	StorageID   string  `json:"storage_id"`
-	StorageName string  `json:"storage_name"`
-	UsedBytes   int64   `json:"used_bytes"`
-	BlobCount   int64   `json:"blob_count"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	Description     string  `json:"description"`
+	Owner           UserRef `json:"owner"`
+	Role            string  `json:"role"`
+	StorageID       string  `json:"storage_id"`
+	StorageName     string  `json:"storage_name"`
+	StorageLocation string  `json:"storage_location"` // the backend's location label, "" when not set
+	UsedBytes       int64   `json:"used_bytes"`
+	BlobCount       int64   `json:"blob_count"`
 	// InboxEnabled: the project accepts anonymous uploads; InboxURL is only sent to editors and owners.
 	InboxEnabled bool    `json:"inbox_enabled"`
 	InboxURL     *string `json:"inbox_url"`
@@ -50,6 +51,7 @@ type Storage struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Provider  string `json:"provider"`
+	Location  string `json:"location"` // display label such as "Singapore"; "" when not set
 	IsDefault bool   `json:"is_default"`
 }
 
@@ -81,6 +83,7 @@ type Share struct {
 	ProjectName   string  `json:"project_name"`
 	BlobID        *string `json:"blob_id"`
 	BlobName      *string `json:"blob_name"`
+	DownloadURL   *string `json:"download_url"` // direct link for wget/curl; single-file shares only
 	HasPassword   bool    `json:"has_password"`
 	ExpiresAt     *int64  `json:"expires_at"`
 	MaxDownloads  *int64  `json:"max_downloads"`

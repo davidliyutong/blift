@@ -13,13 +13,14 @@ compatibility_flags = ["nodejs_compat"]
 # routes = [{ pattern = "files.example.com", custom_domain = true }]
 # workers_dev = true
 
-# The SPA is served by Workers static assets; only /api/* and /install.sh invoke the Worker,
-# so page loads cost no Worker invocations or CPU time.
+# The SPA is served by Workers static assets; only /api/*, /install.sh and share links (/s/*)
+# invoke the Worker, so other page loads cost no Worker invocations or CPU time. A browser opening
+# a share link is handed straight back to the assets; wget and curl get the file (a redirect).
 [assets]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/install.sh"]
+run_worker_first = ["/api/*", "/install.sh", "/s/*"]
 
 [[d1_databases]]
 binding = "DB"

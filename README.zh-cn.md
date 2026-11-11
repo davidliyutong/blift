@@ -22,8 +22,8 @@ AWS S3、RustFS、MinIO……）为后端。它原生运行在 **Cloudflare Work
 
 - **极简结构**：只有「项目 → 文件」两级，没有文件夹树。
 - **直传**：≤ 64 MiB 的文件单次预签名 `PUT`，更大的自动分片并行上传（单片失败单独重试）；CLI 分段并行下载。
-- **任意 S3 兼容存储**：可同时配置多个后端，按项目选择；管理页「应用 CORS」一键配置存储桶。
-- **分享**：单个文件或整个项目的公开链接，可设访问密码、有效期、下载次数上限；接收方无需账号。
+- **任意 S3 兼容存储**：可同时配置多个后端，按项目选择（可为后端标注「新加坡」这样的区域，方便用户挑选）；管理页「应用 CORS」一键配置存储桶。
+- **分享**：单个文件或整个项目的公开链接，可设访问密码、有效期、下载次数上限；接收方无需账号，也可以直接用 `wget` / `curl` 下载。
 - **收件箱**：项目可开启匿名上传链接（默认关闭）：上传者无需账号，看不到项目里的任何文件；重名时自动编号，不会覆盖。
 - **单点登录**：OIDC + PKCE，优先适配 Authentik；ID Token 支持 HS256 / RS256 / ES256；首次登录自动注册，
   可按 IdP 用户组授予管理员。
@@ -90,7 +90,8 @@ make deploy         # 构建前端并部署 API + 静态资源 + GC 定时任务
 ```
 
 数据库迁移在第一次请求时自动执行。仓库里的 `server/wrangler.toml` 只是模板；你自己的部署配置（D1 ID、
-自定义域名、`PUBLIC_URL`）放在 `server/wrangler.local.toml`，Makefile 检测到它就会使用。自定义域名：加上
+自定义域名、`PUBLIC_URL`）放在 `server/wrangler.local.toml`，Makefile 检测到它就会使用。`make cf-init` 只复制一次模板：
+升级时模板若有变化（CHANGELOG.md 会写明，例如 `run_worker_first` 新增路径），请在你的副本里做同样的修改。自定义域名：加上
 `routes = [{ pattern = "files.example.com", custom_domain = true }]`，并同时写 `workers_dev = true`
 （否则 wrangler 会关闭 `*.workers.dev` 地址）；Worker 有多个域名时，在 `[vars]` 中设置 `PUBLIC_URL` 作为规范地址。
 
@@ -124,12 +125,15 @@ docker run -d -p 9000:9000 -e RUSTFS_ACCESS_KEY=blift -e RUSTFS_SECRET_KEY=blift
 管理页的「应用 CORS」会在服务商和密钥允许时调用 `PutBucketCors` 自动配置。存储的 endpoint 必须能被服务端
 和用户浏览器以**同一个地址**访问（预签名 URL 绑定了 Host）。
 
-| 服务 | Endpoint | Region | Path-style | 备注 |
+| 服务 | Endpoint | S3 区域 | Path-style | 备注 |
 | --- | --- | --- | --- | --- |
 | Cloudflare R2 | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` | `auto` | 开 | R2 API Token（Object Read & Write） |
 | Backblaze B2 | `https://s3.<region>.backblazeb2.com` | 如 `us-west-004` | 开 | 必须设置生命周期，见下文 |
 | AWS S3 | `https://s3.<region>.amazonaws.com` | 如 `us-east-1` | 关 | |
 | RustFS / MinIO | `http(s)://<host>:9000` | `us-east-1` | 开 | |
+
+「S3 区域」是服务商要求的签名区域；「区域」则是可选的显示名称，例如「新加坡」「美西」，用户新建项目时会在
+存储后端名称旁边看到它。
 
 **Backblaze B2**：B2 会保留文件的所有版本，S3 接口不带版本号的删除只会把文件隐藏。请把存储桶生命周期设为
 **Keep only the last version of the file**，否则删除的文件会一直占用空间、产生费用。使用不开 Object Lock 的私有桶，

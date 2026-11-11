@@ -75,6 +75,17 @@ export function publicOrigin(c: Ctx): string {
   return `${proto}://${host}`;
 }
 
+/** Link previews of chat apps (Slackbot, Discordbot, TelegramBot, facebookexternalhit, …). */
+const LINK_PREVIEW = /bot|crawl|spider|preview|facebookexternalhit|whatsapp/i;
+
+export const isLinkPreview = (req: Request) => LINK_PREVIEW.test(req.headers.get("user-agent") ?? "");
+
+/**
+ * A browser (it asks for HTML) or a link preview, rather than wget, curl or a script
+ * (`Accept: *\/*`): it should get a web page, not a file.
+ */
+export const wantsPage = (req: Request) => (req.headers.get("accept") ?? "").includes("text/html") || isLinkPreview(req);
+
 /** Only same-site relative paths, to avoid open redirects. */
 export const safeRedirect = (r: string | undefined) =>
   r && r.startsWith("/") && !r.startsWith("//") && !r.startsWith("/\\") ? r : "/";

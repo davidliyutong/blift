@@ -99,12 +99,16 @@ func projectInfoCmd() *cobra.Command {
 			if err != nil || jsonOut {
 				return orJSON(err, p)
 			}
+			storage := p.StorageName
+			if p.StorageLocation != "" {
+				storage += " · " + p.StorageLocation
+			}
 			kv("col.id", p.ID,
 				"col.name", p.Name,
 				"col.description", p.Description,
 				"col.owner", p.Owner.Username,
 				"col.role", p.Role,
-				"col.storage", fmt.Sprintf("%s (%s)", p.StorageName, p.StorageID),
+				"col.storage", fmt.Sprintf("%s (%s)", storage, p.StorageID),
 				"col.files", strconv.FormatInt(p.BlobCount, 10),
 				"col.size", ui.Size(p.UsedBytes),
 				"col.inbox", inboxText(p),

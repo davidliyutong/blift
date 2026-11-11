@@ -198,6 +198,7 @@ const toAdminStorage = (s: StorageRow & { project_count: number; used_bytes: num
   access_key_id: s.access_key_id,
   path_style: !!s.path_style,
   prefix: s.prefix,
+  location: s.location,
   is_default: !!s.is_default,
   created_at: s.created_at,
   project_count: s.project_count,
@@ -224,6 +225,8 @@ function storageInput(b: Record<string, unknown>, base?: StorageRow): StorageInp
   if (!/^[A-Za-z0-9._/-]*$/.test(prefix)) throw badRequest("prefix may only contain letters, digits, '.', '_', '-', '/'");
   const bucket = str(pick("bucket"), "bucket", 63);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/.test(bucket)) throw badRequest("invalid bucket name");
+  const location = String(pick("location") ?? "").trim();
+  if (location.length > 64) throw badRequest("location is too long (max 64)");
   return {
     name: str(pick("name"), "name", 64),
     provider: oneOf(pick("provider") ?? "s3", "provider", PROVIDERS),
@@ -234,6 +237,7 @@ function storageInput(b: Record<string, unknown>, base?: StorageRow): StorageInp
     secret_access_key: typeof b.secret_access_key === "string" ? b.secret_access_key : "",
     path_style: b.path_style !== undefined ? !!b.path_style : base ? !!base.path_style : true,
     prefix: prefix && !prefix.endsWith("/") ? `${prefix}/` : prefix,
+    location,
     is_default: b.is_default !== undefined ? !!b.is_default : !!base?.is_default,
   };
 }
@@ -253,15 +257,15 @@ async function saveStorage(c: Ctx, id: string, s: StorageInput, secretEnc: strin
     isNew
       ? stmt(
           db,
-          `INSERT INTO storages (id, name, provider, endpoint, region, bucket, access_key_id, secret_access_key, path_style, prefix, is_default, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          id, s.name, s.provider, s.endpoint, s.region, s.bucket, s.access_key_id, secretEnc, s.path_style, s.prefix, isDefault, t, t,
+          `INSERT INTO storages (id, name, provider, endpoint, region, bucket, access_key_id, secret_access_key, path_style, prefix, location, is_default, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, s.name, s.provider, s.endpoint, s.region, s.bucket, s.access_key_id, secretEnc, s.path_style, s.prefix, s.location, isDefault, t, t,
         )
       : stmt(
           db,
           `UPDATE storages SET name = ?, provider = ?, endpoint = ?, region = ?, bucket = ?, access_key_id = ?, secret_access_key = ?,
-             path_style = ?, prefix = ?, is_default = ?, updated_at = ? WHERE id = ?`,
-          s.name, s.provider, s.endpoint, s.region, s.bucket, s.access_key_id, secretEnc, s.path_style, s.prefix, isDefault, t, id,
+             path_style = ?, prefix = ?, location = ?, is_default = ?, updated_at = ? WHERE id = ?`,
+          s.name, s.provider, s.endpoint, s.region, s.bucket, s.access_key_id, secretEnc, s.path_style, s.prefix, s.location, isDefault, t, id,
         ),
   );
   await db.batch(stmts);

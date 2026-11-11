@@ -5,6 +5,7 @@ import { authenticate } from "./auth";
 import { ensureMigrated } from "./db/migrations";
 import type { AppEnv } from "./env";
 import { ApiError, notConfigured } from "./lib/errors";
+import { wantsPage } from "./lib/http";
 import admin from "./routes/admin";
 import auth from "./routes/auth";
 import { blobs, projectBlobs } from "./routes/blobs";
@@ -17,16 +18,34 @@ import { publicShares, shares } from "./routes/shares";
 import { projectUploads, uploads } from "./routes/uploads";
 import { flushStats } from "./services/stats";
 
-/** Paths outside /api that the API answers; wrangler.toml `run_worker_first` lists them too. */
-const ALIASES: Record<string, string> = { "/install.sh": "/api/cli/install.sh" };
+/**
+ * Paths outside /api that the API answers, and the /api routes they are rewritten onto.
+ * wrangler.toml `run_worker_first` lists them too, and node.ts sends them to the API.
+ */
+const ALIASES: [RegExp, string][] = [
+  [/^\/install\.sh$/, "/api/cli/install.sh"],
+  // Share links: direct downloads for wget and curl. Browsers get the web page (isSharePage).
+  [/^\/s\/([^/]+)(\/[^/]+)?\/?$/, "/api/public/shares/$1/direct$2"],
+];
 
 /** Rewrites a top-level alias such as /install.sh onto its /api route. */
 export function resolveAlias(req: Request): Request {
   const url = new URL(req.url);
-  const to = ALIASES[url.pathname];
-  if (!to) return req;
-  url.pathname = to;
-  return new Request(url, req);
+  const alias = ALIASES.find(([from]) => from.test(url.pathname));
+  if (!alias) return req;
+  url.pathname = url.pathname.replace(...alias);
+  // Aliases are GET routes, so method and headers are all that is carried over. (Copying the
+  // request with `new Request(url, req)` throws on Node 26 with @hono/node-server's requests.)
+  return new Request(url, { method: req.method, headers: req.headers });
+}
+
+/**
+ * A browser opening a share link (/s/<token>): it gets the web app, as for any other page, and
+ * the entry points hand it over before the API runs, so page loads never touch the database.
+ * wget and curl get the file instead (the alias above); /s/<token>/<name> is always a download.
+ */
+export function isSharePage(req: Request): boolean {
+  return (req.method === "GET" || req.method === "HEAD") && /^\/s\/[^/]+\/?$/.test(new URL(req.url).pathname) && wantsPage(req);
 }
 
 export function createApp() {

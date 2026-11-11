@@ -68,6 +68,7 @@ type Project = {
   owner: UserRef;
   role: "owner" | "editor" | "viewer";   // caller's role
   storage_id: string; storage_name: string;
+  storage_location: string;              // the backend's location label ("" when not set)
   used_bytes: number; blob_count: number;
   inbox_enabled: boolean;                // accepts anonymous uploads (see "Inbox")
   inbox_url: string | null;              // <public origin>/i/<token>; only for editors and owners
@@ -87,6 +88,8 @@ type Share = {
   id: string; token: string; url: string;        // url = <public origin>/s/<token>
   project_id: string; project_name: string;
   blob_id: string | null; blob_name: string | null;  // null = whole project
+  download_url: string | null;   // <public origin>/s/<token>/<file name, URL-encoded>; single-file shares
+                                 // only: a direct link for wget/curl (see "Share links for wget and curl")
   has_password: boolean;
   expires_at: number | null; max_downloads: number | null;
   download_count: number; view_count: number;
@@ -214,7 +217,10 @@ Web-side (authenticated):
 
 ## Storages (read-only list for users)
 
-`GET /api/storages` → `{ "storages": [{ "id", "name", "provider", "is_default" }] }`
+`GET /api/storages` → `{ "storages": [{ "id", "name", "provider", "location", "is_default" }] }`
+
+`location` is a free-text label set by the admin, such as `Singapore` or `US West` (`""` when not
+set), shown when users pick the backend of a new project (`storage_id` in `POST /api/projects`).
 
 ## Projects
 
@@ -317,6 +323,34 @@ as `?cursor=`. `file_count` / `total_bytes` describe the whole share. For passwo
 header `X-Share-Access: <token>` or query `?access_token=` (the unlock call also sets an
 HttpOnly cookie for browsers). Errors: `not_found`, `share_expired`, `share_exhausted`, `invalid_password`.
 
+### Share links for wget and curl
+
+The share link `<public origin>/s/<token>` and the direct link `/s/<token>/<name>` are answered by
+the API too: they are aliases of `GET /api/public/shares/:token/direct` and
+`GET /api/public/shares/:token/direct/:name`. File bytes still never pass through the server.
+
+- **Browsers** get the web page at `/s/<token>` as before: requests whose `Accept` header contains
+  `text/html`, and link previews of chat apps (a `User-Agent` containing `bot`, `preview`,
+  `crawl`, …, so that previews do not use up downloads).
+- **Other clients** (wget, curl and scripts send `Accept: */*`) get the file:
+  - `/s/<token>` of a single-file share, or `/s/<token>/<name>` where `name` is the shared file's
+    name, or the name of a file of a shared project → `302` to a presigned S3 URL (valid 1 h,
+    `Content-Disposition` = the file name). It counts as a download exactly like
+    `…/blobs/:blob_id/download` (and is refused once `max_downloads` is reached). Plain
+    `wget <url>` names the file after the last segment of the URL it was given, which is why
+    `Share.download_url` has the name in it; `curl -OJL` works with either form.
+  - `/s/<token>` of a project share → `200 text/plain`, one direct link
+    (`<public origin>/s/<token>/<name>`) per line for the first 1000 files by name, e.g. for
+    `wget -i`. Requests with `?access_token=` get it appended to every link.
+  - `HEAD` answers `200` with the file's `Content-Length`, `Content-Type` and
+    `Content-Disposition`, without counting a download or issuing a URL.
+- `/s/<token>/<name>` downloads in browsers too; browsers (and link previews) that hit an error
+  there are redirected to the share page `/s/<token>`, which shows it (or asks for the password).
+- Password-protected shares need an access token from `…/unlock`, as header
+  `X-Share-Access: <token>` or query `?access_token=`; without one → `403`.
+- Errors are `text/plain` (`<message> (<code>)`) with the API's status and code: `not_found` (404),
+  `share_expired` / `share_exhausted` (410), `invalid_password` (403).
+
 ## Inbox (anonymous uploads, no login)
 
 An owner can let anyone with a link upload into a project: `PATCH /api/projects/:id`
@@ -367,7 +401,9 @@ type AdminUser = User & { status: "active" | "disabled"; quota_override: number 
 
 type AdminStorage = { id, name, provider: "s3"|"r2"|"b2"|"rustfs"|"minio"|"other",
   endpoint, region, bucket, access_key_id, path_style: boolean, prefix: string,
-  is_default: boolean, created_at, project_count: number, used_bytes: number };
+  location: string, is_default: boolean, created_at, project_count: number, used_bytes: number };
+// region: the S3 signing region ("auto" for R2, "us-east-1" for MinIO/RustFS…).
+// location: optional display label for users (≤ 64 chars, "" = none), e.g. "Singapore".
 
 type Settings = {
   site: { name: string; default_quota_bytes: number /* -1 unlimited */ };

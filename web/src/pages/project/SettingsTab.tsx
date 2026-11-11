@@ -74,7 +74,9 @@ export function SettingsTab({ project, onUpdated }: { project: Project; onUpdate
               <InlineCopyText>{project.id}</InlineCopyText>
             </Detail>
             <Detail label={t("common.owner")}>{displayName(project.owner)}</Detail>
-            <Detail label={t("psettings.storage")}>{project.storage_name}</Detail>
+            <Detail label={t("psettings.storage")}>
+              {project.storage_location ? `${project.storage_name} · ${project.storage_location}` : project.storage_name}
+            </Detail>
             <Detail label={t("projects.usage")}>
               {formatBytes(project.used_bytes)} · {t("common.items", { n: project.blob_count })}
             </Detail>

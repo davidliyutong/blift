@@ -25,10 +25,12 @@ and bookkeeping.
 - **Flat by design.** Projects contain files, nothing more: no folder trees to manage.
 - **Direct transfers.** Presigned single `PUT` up to 64 MiB, parallel multipart uploads above
   that (each part retried on its own), parallel ranged downloads in the CLI.
-- **Any S3-compatible storage.** Several backends side by side, chosen per project; `Apply CORS`
-  configures the bucket from the admin UI.
+- **Any S3-compatible storage.** Several backends side by side, chosen per project (an optional
+  location label such as "Singapore" helps users pick); `Apply CORS` configures the bucket from
+  the admin UI.
 - **Sharing.** Public links for a single file or a whole project, with optional password,
-  expiry and download limit; recipients need no account.
+  expiry and download limit; recipients need no account, and `wget` / `curl` download straight
+  from the link.
 - **Inbox.** A project can take anonymous uploads through a link (off by default): senders need no
   account and see nothing in the project; a name that is taken gets a number instead of replacing.
 - **Single sign-on.** OIDC with PKCE, tuned for Authentik; HS256, RS256 and ES256 ID tokens;
@@ -104,7 +106,9 @@ make deploy         # builds the web UI and deploys API + static assets + the GC
 
 Migrations run automatically on the first request. The committed `server/wrangler.toml` is a
 template; your deployment's values (D1 id, custom domain, `PUBLIC_URL`) go in
-`server/wrangler.local.toml`, which the Makefile uses whenever it exists. For a custom domain add
+`server/wrangler.local.toml`, which the Makefile uses whenever it exists. `make cf-init` copies
+the template once: when an upgrade changes it (CHANGELOG.md says so, e.g. a new `run_worker_first`
+path), make the same change in your copy. For a custom domain add
 `routes = [{ pattern = "files.example.com", custom_domain = true }]` together with
 `workers_dev = true` (wrangler otherwise turns the `*.workers.dev` URL off), and set `PUBLIC_URL`
 under `[vars]` when the Worker has more than one hostname.
@@ -141,12 +145,16 @@ Browsers talk to the bucket directly, so the bucket must allow CORS from blift's
 `PutBucketCors` where the provider and key allow it. The endpoint must be reachable under the
 same URL by the server and by users' browsers, since presigned URLs are bound to the host.
 
-| Provider | Endpoint | Region | Path-style | Notes |
+| Provider | Endpoint | S3 region | Path-style | Notes |
 | --- | --- | --- | --- | --- |
 | Cloudflare R2 | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` | `auto` | on | R2 API token with Object Read & Write |
 | Backblaze B2 | `https://s3.<region>.backblazeb2.com` | e.g. `us-west-004` | on | needs the lifecycle rule below |
 | AWS S3 | `https://s3.<region>.amazonaws.com` | e.g. `us-east-1` | off | |
 | RustFS / MinIO | `http(s)://<host>:9000` | `us-east-1` | on | |
+
+The S3 region is the signing region the provider expects. **Location** is separate and optional:
+a label such as "Singapore" or "US West" that users see next to the backend's name when they
+create a project.
 
 **Backblaze B2.** B2 keeps every version of a file, and an S3 delete without a version id only
 hides it. Set the bucket's lifecycle to **Keep only the last version of the file**, otherwise

@@ -105,6 +105,7 @@ export function StoragesPage() {
                 <Table.Row>
                   <Table.Head>{t("common.name")}</Table.Head>
                   <Table.Head>{t("storages.provider")}</Table.Head>
+                  <Table.Head className="hidden sm:table-cell">{t("storages.location")}</Table.Head>
                   <Table.Head className="hidden md:table-cell">{t("storages.bucket")}</Table.Head>
                   <Table.Head className="text-right">{t("storages.projects")}</Table.Head>
                   <Table.Head className="text-right">{t("storages.used")}</Table.Head>
@@ -123,6 +124,7 @@ export function StoragesPage() {
                     <Table.Cell>
                       <Badge variant="outline">{PROVIDERS[s.provider]?.label ?? s.provider}</Badge>
                     </Table.Cell>
+                    <Table.Cell className="hidden sm:table-cell">{s.location}</Table.Cell>
                     <Table.Cell className="hidden max-w-[22rem] md:table-cell">
                       <div className="truncate font-mono text-xs">
                         {s.bucket}
@@ -207,6 +209,7 @@ function toInput(s: AdminStorage): StorageInput {
     access_key_id: s.access_key_id,
     path_style: s.path_style,
     prefix: s.prefix,
+    location: s.location,
     is_default: s.is_default,
   };
 }
@@ -221,6 +224,7 @@ const EMPTY: StorageInput = {
   secret_access_key: "",
   path_style: true,
   prefix: "",
+  location: "",
   is_default: false,
 };
 
@@ -365,6 +369,14 @@ function StorageDialog({
         onChange={(e) => set("prefix", e.target.value)}
         placeholder="blift/"
         className="font-mono"
+        required={false}
+      />
+      <Input
+        label={t("storages.location")}
+        description={t("storages.locationHint")}
+        value={form.location}
+        onChange={(e) => set("location", e.target.value)}
+        maxLength={64}
         required={false}
       />
       <div className="flex flex-col gap-3">

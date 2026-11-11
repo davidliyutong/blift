@@ -194,7 +194,11 @@ func completeStorages(cmd *cobra.Command, _ []string, toComplete string) ([]stri
 		var out []string
 		for _, s := range storages {
 			if hasPrefixFold(s.Name, toComplete) {
-				out = append(out, s.Name+"\t"+s.Provider)
+				desc := s.Provider
+				if s.Location != "" {
+					desc = s.Location + " (" + s.Provider + ")"
+				}
+				out = append(out, s.Name+"\t"+desc)
 			}
 		}
 		return out

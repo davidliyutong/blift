@@ -74,19 +74,23 @@ func TestParseExpires(t *testing.T) {
 }
 
 func TestParseShareRef(t *testing.T) {
-	cases := []struct{ ref, server, token string }{
-		{"https://files.example.com/s/AbC123", "https://files.example.com", "AbC123"},
-		{"https://example.com/blift/s/tok/", "https://example.com/blift", "tok"},
-		{"tok", "https://default", "tok"},
+	cases := []struct{ ref, server, token, name string }{
+		{"https://files.example.com/s/AbC123", "https://files.example.com", "AbC123", ""},
+		{"https://example.com/blift/s/tok/", "https://example.com/blift", "tok", ""},
+		{"https://files.example.com/s/AbC123/hello%20%E4%BD%A0%E5%A5%BD.txt", "https://files.example.com", "AbC123", "hello 你好.txt"},
+		{"https://example.com/blift/s/tok/s", "https://example.com/blift", "tok", "s"},
+		{"tok", "https://default", "tok", ""},
 	}
 	for _, c := range cases {
-		s, tok, err := parseShareRef(c.ref, "https://default")
-		if err != nil || s != c.server || tok != c.token {
-			t.Errorf("parseShareRef(%q) = %q %q %v", c.ref, s, tok, err)
+		s, tok, name, err := parseShareRef(c.ref, "https://default")
+		if err != nil || s != c.server || tok != c.token || name != c.name {
+			t.Errorf("parseShareRef(%q) = %q %q %q %v", c.ref, s, tok, name, err)
 		}
 	}
-	if _, _, err := parseShareRef("https://example.com/x", ""); err == nil {
-		t.Error("expected error for non-share URL")
+	for _, bad := range []string{"https://example.com/x", "https://example.com/s/", "https://example.com/s/tok/a/b"} {
+		if _, _, _, err := parseShareRef(bad, ""); err == nil {
+			t.Errorf("expected an error for %q", bad)
+		}
 	}
 }
 

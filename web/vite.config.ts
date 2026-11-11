@@ -13,6 +13,12 @@ export default defineConfig({
     proxy: {
       "/api": { target: process.env.BLIFT_API ?? "http://localhost:8787", changeOrigin: false },
       "/install.sh": { target: process.env.BLIFT_API ?? "http://localhost:8787", changeOrigin: false },
+      // Share links: browsers get the app, wget and curl the API (see server/src/app.ts isSharePage).
+      "/s/": {
+        target: process.env.BLIFT_API ?? "http://localhost:8787",
+        changeOrigin: false,
+        bypass: (req) => (req.headers.accept?.includes("text/html") && /^\/s\/[^/]+\/?(\?|$)/.test(req.url ?? "") ? req.url : undefined),
+      },
     },
   },
   build: {
