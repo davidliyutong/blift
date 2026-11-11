@@ -6,6 +6,11 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `make cf-config` writes `server/wrangler.local.toml` from the template and the environment
+  (`CF_D1_ID`, `CF_DOMAIN`, `PUBLIC_URL`), so Cloudflare Workers Builds can deploy from GitHub.
+
 ## [0.2.0] - 2026-11-11
 
 ### Added
