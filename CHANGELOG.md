@@ -18,6 +18,10 @@ All notable changes are documented here. The format follows
   name gets a number instead of replacing a file, and usage counts against the owner's quota.
   Inbox uploads are labelled in the file list.
 
+### Fixed
+
+- `/install.sh` answered 500 on Node 26.
+
 ## [0.1.2] - 2026-11-07
 
 ### Added

@@ -26,7 +26,9 @@ export function resolveAlias(req: Request): Request {
   const to = ALIASES[url.pathname];
   if (!to) return req;
   url.pathname = to;
-  return new Request(url, req);
+  // Aliases are GET routes, so method and headers are all that is carried over. (Copying the
+  // request with `new Request(url, req)` throws on Node 26 with @hono/node-server's requests.)
+  return new Request(url, { method: req.method, headers: req.headers });
 }
 
 export function createApp() {
