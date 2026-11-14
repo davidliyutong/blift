@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useParams } from "react-router";
 import { Badge, Banner, Button, LinkButton, SensitiveInput } from "@cloudflare/kumo";
 import {
@@ -19,6 +19,7 @@ import { formatBytes, formatRelative } from "@/lib/format";
 import { Card, CenteredLayout } from "@/components/CenteredLayout";
 import { Loading } from "@/components/Page";
 import { FileIcon } from "@/components/FileIcon";
+import { ShareUploadView, UploadLimits } from "./ShareUpload";
 
 const accessKey = (token: string) => `blift.share.${token}`;
 /** Files per request; long project shares load further pages on demand. */
@@ -98,13 +99,7 @@ export function PublicSharePage() {
   }
 
   const { share } = res.data;
-  const blobs = res.data.blobs && [...res.data.blobs, ...(more?.blobs ?? [])];
-  const cursor = more ? more.cursor : (res.data.next_cursor ?? null);
-  const left = share.max_downloads != null ? Math.max(0, share.max_downloads - share.download_count) : null;
-  const fileCount = share.file_count ?? blobs?.length ?? 0;
-  const totalBytes = share.total_bytes ?? (blobs ?? []).reduce((s, b) => s + b.size, 0);
-
-  const meta = (
+  const metaWith = (badges: ReactNode) => (
     <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-kumo-subtle">
       <span>{t("pub.sharedBy", { name: share.creator })}</span>
       {share.expires_at && (
@@ -113,8 +108,17 @@ export function PublicSharePage() {
           <span>{t("pub.expires", { when: formatRelative(share.expires_at, lang) })}</span>
         </>
       )}
-      {left != null && <Badge variant="neutral">{t("pub.downloadsLeft", { n: left })}</Badge>}
+      {badges}
     </div>
+  );
+  const left =
+    share.mode === "download" && share.max_downloads != null ? Math.max(0, share.max_downloads - share.download_count) : null;
+  const meta = metaWith(
+    share.mode === "upload" ? (
+      <UploadLimits share={share} />
+    ) : (
+      left != null && <Badge variant="neutral">{t("pub.downloadsLeft", { n: left })}</Badge>
+    ),
   );
 
   if (share.locked) {
@@ -148,6 +152,14 @@ export function PublicSharePage() {
     );
   }
 
+  if (share.mode === "upload") {
+    return <ShareUploadView token={token} access={access} share={share} meta={metaWith} footer={footer} />;
+  }
+
+  const blobs = res.data.blobs && [...res.data.blobs, ...(more?.blobs ?? [])];
+  const cursor = more ? more.cursor : (res.data.next_cursor ?? null);
+  const fileCount = share.file_count ?? blobs?.length ?? 0;
+  const totalBytes = share.total_bytes ?? (blobs ?? []).reduce((s, b) => s + b.size, 0);
   const href = (blobId: string) => api.public.downloadHref(token, blobId, access);
 
   if (share.kind === "blob" && blobs?.length === 1) {

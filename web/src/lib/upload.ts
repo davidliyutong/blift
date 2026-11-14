@@ -18,11 +18,11 @@ export interface UploadItem {
 type ConfirmOverwrite = (name: string) => Promise<boolean>;
 type DoneListener = (projectId: string) => void;
 
-/** Where a queue sends its API calls: a project (signed in) or a project inbox (anonymous). */
+/** Where a queue sends its API calls: a project (signed in) or an upload link (anonymous). */
 export interface UploadApi {
   init(projectId: string, body: { name: string; size: number; content_type: string; overwrite?: boolean }): Promise<UploadInit>;
   parts(blobId: string, partNumbers: number[]): Promise<{ urls: Record<string, string> }>;
-  /** Resolves to the file's final name (inbox uploads get a free name instead of replacing). */
+  /** Resolves to the file's final name (upload-link uploads get a free name instead of replacing). */
   complete(blobId: string): Promise<{ name: string }>;
   abort(blobId: string): Promise<void>;
 }
@@ -34,24 +34,28 @@ const projectApi: UploadApi = {
   abort: api.uploads.abort,
 };
 
-/** Uploads into a project inbox; each upload carries its own upload token. */
-export function inboxApi(token: string): UploadApi {
+/**
+ * Uploads through an upload link (share token; `access` unlocks a password-protected one). Each
+ * upload carries its own upload token.
+ */
+export function shareUploadApi(token: string, access?: string): UploadApi {
+  const up = api.public.uploads;
   const tokens = new Map<string, string>();
   const tok = (blobId: string) => tokens.get(blobId) ?? "";
   return {
     init: async (_projectId, body) => {
-      const r = await api.inbox.init(token, body);
+      const r = await up.init(token, access, body);
       tokens.set(r.blob_id, r.upload_token);
       return r;
     },
-    parts: (blobId, nums) => api.inbox.parts(token, blobId, tok(blobId), nums),
+    parts: (blobId, nums) => up.parts(token, blobId, tok(blobId), nums),
     complete: async (blobId) => {
-      const r = await api.inbox.complete(token, blobId, tok(blobId));
+      const r = await up.complete(token, blobId, tok(blobId));
       tokens.delete(blobId);
       return r;
     },
     abort: async (blobId) => {
-      await api.inbox.abort(token, blobId, tok(blobId));
+      await up.abort(token, blobId, tok(blobId));
       tokens.delete(blobId);
     },
   };

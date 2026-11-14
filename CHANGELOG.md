@@ -10,6 +10,19 @@ All notable changes are documented here. The format follows
 
 - `make cf-config` writes `server/wrangler.local.toml` from the template and the environment
   (`CF_D1_ID`, `CF_DOMAIN`, `PUBLIC_URL`), so Cloudflare Workers Builds can deploy from GitHub.
+- `blift share put <inbox link> <file>...` uploads through an inbox link without signing in
+  (`--password` for a protected link, `--name`, `-j`); it stops once the link is used up.
+
+### Changed
+
+- **Breaking:** the project inbox is now a kind of share link. "Create share link" offers Download
+  or Inbox; an inbox link (`/s/<token>`) can have a password, an expiry and limits on the number of
+  files and their total size, and it is listed, copied and deleted like any share. Editors can
+  create one. Project settings no longer have an inbox switch, existing inbox links (`/i/<token>`)
+  stop working, and the API drops `Project.inbox_enabled` / `inbox_url`,
+  `POST /api/projects/:id/inbox/reset` and `/api/public/inbox/*` (uploads go to
+  `/api/public/shares/:token/uploads`). `blift share create --upload [--max-uploads N]
+  [--max-size 10G]` creates one, and `blift share ls` shows each link's type and usage.
 
 ### Fixed
 
@@ -17,6 +30,7 @@ All notable changes are documented here. The format follows
   page: its auto-submit clicked "Sign in with a different account", which signed the session out.
   That link is now outside the code form and renamed "Use a different account", and the code
   form submits itself once six digits are entered.
+- The breadcrumb link back to the project list ("Projects") reloaded the current page instead.
 
 ## [0.2.0] - 2026-11-11
 

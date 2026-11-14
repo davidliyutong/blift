@@ -5,8 +5,6 @@ import type {
   AdminUser,
   Blob,
   CliLoginRequest,
-  InboxInfo,
-  InboxUploadInit,
   Info,
   Member,
   Project,
@@ -16,6 +14,8 @@ import type {
   Settings,
   SettingsPatch,
   Share,
+  ShareMode,
+  ShareUploadInit,
   Stats,
   StorageInput,
   StorageSummary,
@@ -69,9 +69,8 @@ export const api = {
     create: (body: { name: string; description?: string; storage_id?: string }) =>
       http.post<Project>("/api/projects", body),
     get: (id: string) => http.get<Project>(`/api/projects/${enc(id)}`),
-    update: (id: string, body: { name?: string; description?: string; inbox_enabled?: boolean }) =>
+    update: (id: string, body: { name?: string; description?: string }) =>
       http.patch<Project>(`/api/projects/${enc(id)}`, body),
-    resetInbox: (id: string) => http.post<Project>(`/api/projects/${enc(id)}/inbox/reset`),
     remove: (id: string) => http.del(`/api/projects/${enc(id)}`),
     members: (id: string) => http.get<{ members: Member[] }>(`/api/projects/${enc(id)}/members`),
     addMember: (id: string, user: string, role: ProjectRole) =>
@@ -117,10 +116,13 @@ export const api = {
     list: (projectId?: string) => http.get<{ shares: Share[] }>(`/api/shares${qs({ project_id: projectId })}`),
     create: (body: {
       project_id: string;
+      mode?: ShareMode;
       blob_id?: string;
       password?: string;
       expires_in?: number | null;
       max_downloads?: number | null;
+      max_uploads?: number | null;
+      max_upload_bytes?: number | null;
     }) => http.post<Share>("/api/shares", body),
     remove: (id: string) => http.del(`/api/shares/${enc(id)}`),
   },
@@ -134,29 +136,29 @@ export const api = {
       http.post<{ access_token: string }>(`/api/public/shares/${enc(token)}/unlock`, { password }),
     downloadHref: (token: string, blobId: string, access?: string) =>
       `/api/public/shares/${enc(token)}/blobs/${enc(blobId)}/download${qs({ redirect: 1, access_token: access })}`,
-  },
-
-  /** Anonymous uploads through a project inbox (/i/:token); no login. */
-  inbox: {
-    get: (token: string) => http.get<InboxInfo>(`/api/public/inbox/${enc(token)}`),
-    init: (token: string, body: { name: string; size: number; content_type?: string }) =>
-      http.post<InboxUploadInit>(`/api/public/inbox/${enc(token)}/uploads`, body),
-    parts: (token: string, blobId: string, uploadToken: string, part_numbers: number[]) =>
-      http.post<{ urls: Record<string, string>; expires_at: number }>(
-        `/api/public/inbox/${enc(token)}/uploads/${enc(blobId)}/parts`,
-        { part_numbers },
-        { headers: { "X-Upload-Token": uploadToken } },
-      ),
-    complete: (token: string, blobId: string, uploadToken: string) =>
-      http.post<{ name: string; size: number }>(
-        `/api/public/inbox/${enc(token)}/uploads/${enc(blobId)}/complete`,
-        {},
-        { headers: { "X-Upload-Token": uploadToken } },
-      ),
-    abort: (token: string, blobId: string, uploadToken: string) =>
-      request<void>("DELETE", `/api/public/inbox/${enc(token)}/uploads/${enc(blobId)}`, undefined, {
-        headers: { "X-Upload-Token": uploadToken },
-      }),
+    /** Anonymous uploads through an upload link (a share with mode "upload"); no login. */
+    uploads: {
+      init: (token: string, access: string | undefined, body: { name: string; size: number; content_type?: string }) =>
+        http.post<ShareUploadInit>(`/api/public/shares/${enc(token)}/uploads`, body, {
+          headers: access ? { "X-Share-Access": access } : undefined,
+        }),
+      parts: (token: string, blobId: string, uploadToken: string, part_numbers: number[]) =>
+        http.post<{ urls: Record<string, string>; expires_at: number }>(
+          `/api/public/shares/${enc(token)}/uploads/${enc(blobId)}/parts`,
+          { part_numbers },
+          { headers: { "X-Upload-Token": uploadToken } },
+        ),
+      complete: (token: string, blobId: string, uploadToken: string) =>
+        http.post<{ name: string; size: number }>(
+          `/api/public/shares/${enc(token)}/uploads/${enc(blobId)}/complete`,
+          {},
+          { headers: { "X-Upload-Token": uploadToken } },
+        ),
+      abort: (token: string, blobId: string, uploadToken: string) =>
+        request<void>("DELETE", `/api/public/shares/${enc(token)}/uploads/${enc(blobId)}`, undefined, {
+          headers: { "X-Upload-Token": uploadToken },
+        }),
+    },
   },
 
   admin: {

@@ -10,15 +10,18 @@ import { body, int, isLinkPreview, publicOrigin, str, wantsPage } from "../lib/h
 import { newId, newShareToken } from "../lib/ids";
 import { signJwt, verifyJwt } from "../lib/jwt";
 import { contentDisposition } from "../lib/s3";
-import { listBlobs, loadProject, type BlobRow } from "../services/projects";
+import { BLOB_SELECT, listBlobs, loadProject, type BlobRow } from "../services/projects";
 import { addStats } from "../services/stats";
 import { storageFor } from "../services/storage";
 import { userRef } from "../services/users";
 import { DOWNLOAD_TTL } from "./blobs";
+import { abortUpload, finishUpload, partUrls, startUpload, UPLOAD_TTL, uploadRequest } from "./uploads";
 
 type ShareRow = {
   id: string;
   token: string;
+  /** 'upload' = an inbox: anonymous uploads into the project, nothing to download. */
+  mode: "download" | "upload";
   project_id: string;
   blob_id: string | null;
   creator_id: string;
@@ -26,10 +29,17 @@ type ShareRow = {
   expires_at: number | null;
   max_downloads: number | null;
   download_count: number;
+  max_uploads: number | null;
+  max_upload_bytes: number | null;
+  upload_count: number;
+  upload_bytes: number;
   view_count: number;
   created_at: number;
   project_name: string;
+  project_description: string;
+  project_storage_id: string;
   owner_id: string;
+  owner_status: string | null;
   project_blob_count: number;
   project_used_bytes: number;
   blob_name: string | null;
@@ -39,11 +49,13 @@ type ShareRow = {
 };
 
 const SHARE_SELECT = `
-  SELECT s.*, p.name AS project_name, p.owner_id, p.blob_count AS project_blob_count, p.used_bytes AS project_used_bytes,
+  SELECT s.*, p.name AS project_name, p.description AS project_description, p.storage_id AS project_storage_id,
+         p.owner_id, p.blob_count AS project_blob_count, p.used_bytes AS project_used_bytes, o.status AS owner_status,
          b.name AS blob_name, b.size AS blob_size,
          u.username AS creator_username, u.display_name AS creator_display_name
   FROM shares s
   JOIN projects p ON p.id = s.project_id AND p.status = 'active'
+  LEFT JOIN users o ON o.id = p.owner_id
   LEFT JOIN blobs b ON b.id = s.blob_id
   LEFT JOIN users u ON u.id = s.creator_id`;
 
@@ -54,6 +66,7 @@ const toShare = (c: Ctx, s: ShareRow) => ({
   id: s.id,
   token: s.token,
   url: `${publicOrigin(c)}/s/${s.token}`,
+  mode: s.mode,
   project_id: s.project_id,
   project_name: s.project_name,
   blob_id: s.blob_id,
@@ -63,6 +76,10 @@ const toShare = (c: Ctx, s: ShareRow) => ({
   expires_at: s.expires_at,
   max_downloads: s.max_downloads,
   download_count: s.download_count,
+  max_uploads: s.max_uploads,
+  max_upload_bytes: s.max_upload_bytes,
+  upload_count: s.upload_count,
+  upload_bytes: s.upload_bytes,
   view_count: s.view_count,
   creator: userRef(s.creator_id, s.creator_username, s.creator_display_name),
   created_at: s.created_at,
@@ -90,6 +107,10 @@ shares.post("/", async (c) => {
   const u = requireUser(c);
   const b = await body(c);
   const p = await loadProject(c, str(b.project_id, "project_id", 64), "editor");
+  const mode = b.mode ?? "download";
+  if (mode !== "download" && mode !== "upload") throw badRequest('mode must be "download" or "upload"');
+  const upload = mode === "upload";
+  if (upload && b.blob_id) throw badRequest("upload links cover a whole project");
   let blobId: string | null = null;
   if (b.blob_id) {
     const blob = await one<{ id: string }>(c.env.DB, "SELECT id FROM blobs WHERE id = ? AND project_id = ? AND status = 'active'", b.blob_id, p.id);
@@ -99,20 +120,28 @@ shares.post("/", async (c) => {
   const pw = b.password ? String(b.password) : "";
   if (pw && (pw.length < 4 || pw.length > 128)) throw badRequest("password must be 4-128 characters");
   const expiresIn = b.expires_in == null ? null : int(b.expires_in, "expires_in", 60, 3650 * 86400);
-  const maxDownloads = b.max_downloads == null ? null : int(b.max_downloads, "max_downloads", 1, 1_000_000);
+  // Each mode keeps only its own limits.
+  const limit = (v: unknown, field: string, max: number, applies: boolean) => (!applies || v == null ? null : int(v, field, 1, max));
+  const maxDownloads = limit(b.max_downloads, "max_downloads", 1_000_000, !upload);
+  const maxUploads = limit(b.max_uploads, "max_uploads", 1_000_000, upload);
+  const maxUploadBytes = limit(b.max_upload_bytes, "max_upload_bytes", Number.MAX_SAFE_INTEGER, upload);
 
   const id = newId();
   await run(
     c.env.DB,
-    "INSERT INTO shares (id, token, project_id, blob_id, creator_id, password_hash, expires_at, max_downloads, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    `INSERT INTO shares (id, token, mode, project_id, blob_id, creator_id, password_hash, expires_at, max_downloads, max_uploads, max_upload_bytes, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     newShareToken(),
+    mode,
     p.id,
     blobId,
     u.id,
     pw ? await hashPassword(pw) : null,
     expiresIn ? now() + expiresIn * 1000 : null,
     maxDownloads,
+    maxUploads,
+    maxUploadBytes,
     now(),
   );
   const row = await one<ShareRow>(c.env.DB, `${SHARE_SELECT} WHERE s.id = ?`, id);
@@ -135,12 +164,18 @@ export const publicShares = new Hono<AppEnv>();
 const ACCESS_TTL = 86400;
 const accessCookie = (token: string) => `blift_share_${token}`;
 
+const uploadsUsedUp = (s: ShareRow) =>
+  (s.max_uploads != null && s.upload_count >= s.max_uploads) || (s.max_upload_bytes != null && s.upload_bytes >= s.max_upload_bytes);
+
 async function loadShare(c: Ctx, token: string): Promise<ShareRow> {
   const s = await one<ShareRow>(c.env.DB, `${SHARE_SELECT} WHERE s.token = ?`, token);
   if (!s || (s.blob_id && !s.blob_name)) throw notFound("share");
+  // An upload link of a disabled owner takes nothing.
+  if (s.mode === "upload" && s.owner_status !== "active") throw notFound("share");
   if (s.expires_at && s.expires_at < now()) throw new ApiError(410, "share_expired", "this share has expired");
-  if (s.max_downloads != null && s.download_count >= s.max_downloads)
+  if (s.mode === "download" && s.max_downloads != null && s.download_count >= s.max_downloads)
     throw new ApiError(410, "share_exhausted", "this share reached its download limit");
+  if (s.mode === "upload" && uploadsUsedUp(s)) throw new ApiError(410, "share_exhausted", "this upload link reached its limit");
   return s;
 }
 
@@ -157,6 +192,27 @@ publicShares.get("/:token", async (c) => {
   const unlocked = await isUnlocked(c, s);
   const cursor = c.req.query("cursor") || undefined;
   if (!cursor) c.executionCtx.waitUntil(run(c.env.DB, "UPDATE shares SET view_count = view_count + 1 WHERE id = ?", s.id));
+  if (s.mode === "upload") {
+    // Uploaders learn where their files go and how much the link still takes, nothing else.
+    return c.json({
+      share: {
+        token: s.token,
+        mode: s.mode,
+        kind: "project",
+        name: s.project_name,
+        description: s.project_description,
+        has_password: !!s.password_hash,
+        locked: !unlocked,
+        expires_at: s.expires_at,
+        max_uploads: s.max_uploads,
+        upload_count: s.upload_count,
+        max_upload_bytes: s.max_upload_bytes,
+        upload_bytes: s.upload_bytes,
+        creator: s.creator_display_name || s.creator_username || "",
+        created_at: s.created_at,
+      },
+    });
+  }
   let blobs: Pick<BlobRow, "id" | "name" | "size" | "content_type" | "created_at">[] | undefined;
   let nextCursor: string | null = null;
   if (unlocked && s.blob_id) {
@@ -173,6 +229,7 @@ publicShares.get("/:token", async (c) => {
   return c.json({
     share: {
       token: s.token,
+      mode: s.mode,
       kind: s.blob_id ? "blob" : "project",
       name: s.blob_name ?? s.project_name,
       has_password: !!s.password_hash,
@@ -207,6 +264,7 @@ publicShares.post("/:token/unlock", async (c) => {
 
 /** The shared file a download asks for, by id or by name; 404 when the share does not cover it. */
 async function shareBlob(c: Ctx, s: ShareRow, by: { id: string } | { name: string }): Promise<BlobRow> {
+  if (s.mode !== "download") throw notFound("file");
   const blob =
     "id" in by
       ? await one<BlobRow>(c.env.DB, "SELECT * FROM blobs WHERE id = ? AND project_id = ? AND status = 'active'", by.id, s.project_id)
@@ -257,6 +315,7 @@ publicShares.get("/:token/direct/:name?", async (c) => {
   if (isLinkPreview(c.req.raw)) return c.redirect(page, 302);
   try {
     const s = await loadShare(c, token);
+    if (s.mode === "upload") throw new ApiError(404, "not_found", `this is an upload link; open ${page} in a browser`);
     if (!(await isUnlocked(c, s)))
       throw new ApiError(403, "invalid_password", `this share is password protected; open ${page} in a browser`);
     if (name === undefined && !s.blob_id) {
@@ -285,4 +344,74 @@ publicShares.get("/:token/direct/:name?", async (c) => {
     if (wantsPage(c.req.raw)) return c.redirect(page, 302);
     return c.text(`${e.message} (${e.code})\n`, e.status as 404);
   }
+});
+
+// ---- Upload links (mode 'upload'): anonymous uploads into the share's project. Uploaders can
+// only add files: nothing is listed, downloaded or replaced (a taken name becomes "name (1).ext").
+// Bytes go straight to S3 like every other upload; usage and stats are charged to the project
+// owner. Each init hands out an upload token (a JWT for that one pending blob of that link), which
+// the later calls (parts, complete, abort) send as X-Upload-Token; they work while the link exists,
+// so an upload that has started can finish after the link expires.
+
+/** The pending upload named by the URL, if the upload token is for it and its link. */
+async function loadUpload(c: Ctx) {
+  const s = await one<ShareRow>(c.env.DB, `${SHARE_SELECT} WHERE s.token = ? AND s.mode = 'upload'`, c.req.param("token"));
+  const blobId = c.req.param("blobId");
+  const claims = await verifyJwt<JWTPayload & { typ?: string; sid?: string }>(c.env.APP_SECRET, c.req.header("x-upload-token"));
+  if (!s || claims?.typ !== "upload" || claims.sid !== s.id || claims.sub !== blobId) throw notFound("upload");
+  const blob = await one<BlobRow>(c.env.DB, `${BLOB_SELECT} WHERE b.id = ? AND b.project_id = ? AND b.status = 'pending'`, blobId, s.project_id);
+  if (!blob) throw notFound("upload");
+  c.set("statsUser", s.owner_id);
+  return { s, blob };
+}
+
+publicShares.post("/:token/uploads", async (c) => {
+  const s = await loadShare(c, c.req.param("token"));
+  if (s.mode !== "upload") throw notFound("share");
+  if (!(await isUnlocked(c, s))) throw new ApiError(403, "invalid_password", "password required");
+  const req = uploadRequest(await body(c));
+  if (s.max_upload_bytes != null && s.upload_bytes + req.size > s.max_upload_bytes)
+    throw new ApiError(413, "upload_too_large", "the file is larger than what this upload link can still take");
+  c.set("statsUser", s.owner_id);
+  const project = { id: s.project_id, owner_id: s.owner_id, storage_id: s.project_storage_id };
+  const init = await startUpload(c, project, { ...req, overwrite: false, uploaderId: null, viaInbox: true });
+  const upload_token = await signJwt(c.env.APP_SECRET, { sub: init.blob_id, sid: s.id, typ: "upload" }, UPLOAD_TTL);
+  return c.json({ ...init, upload_token }, 201);
+});
+
+publicShares.post("/:token/uploads/:blobId/parts", async (c) => {
+  const { blob } = await loadUpload(c);
+  return c.json(await partUrls(c, blob, (await body<{ part_numbers?: unknown }>(c)).part_numbers));
+});
+
+publicShares.post("/:token/uploads/:blobId/complete", async (c) => {
+  const { s, blob } = await loadUpload(c);
+  const given = ((await c.req.json().catch(() => ({}))) as { parts?: unknown }).parts;
+  // Count the file first: the WHERE clause keeps the link within its limits when uploads race.
+  const counted = await run(
+    c.env.DB,
+    `UPDATE shares SET upload_count = upload_count + 1, upload_bytes = upload_bytes + ?
+     WHERE id = ? AND (max_uploads IS NULL OR upload_count < max_uploads) AND (max_upload_bytes IS NULL OR upload_bytes + ? <= max_upload_bytes)`,
+    blob.size,
+    s.id,
+    blob.size,
+  );
+  if (!counted) {
+    await abortUpload(c, blob);
+    throw new ApiError(410, "share_exhausted", "this upload link reached its limit");
+  }
+  try {
+    const name = await finishUpload(c, blob, { id: s.project_id, owner_id: s.owner_id }, given);
+    return c.json({ name, size: blob.size });
+  } catch (e) {
+    // Not stored (yet): give the file's share of the limits back.
+    await run(c.env.DB, "UPDATE shares SET upload_count = upload_count - 1, upload_bytes = upload_bytes - ? WHERE id = ?", blob.size, s.id);
+    throw e;
+  }
+});
+
+publicShares.delete("/:token/uploads/:blobId", async (c) => {
+  const { blob } = await loadUpload(c);
+  await abortUpload(c, blob);
+  return c.body(null, 204);
 });

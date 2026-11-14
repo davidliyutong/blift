@@ -334,3 +334,45 @@ func (c *Client) PublicBlobURL(ctx context.Context, token, blobID, access string
 	return &u, c.doH(ctx, http.MethodGet, "/api/public/shares/"+esc(token)+"/blobs/"+esc(blobID)+"/download",
 		accessHeader(access), nil, &u)
 }
+
+// ---- upload links (inboxes, no login) ----
+
+func shareUploadPath(token, blobID string) string {
+	p := "/api/public/shares/" + esc(token) + "/uploads"
+	if blobID != "" {
+		p += "/" + esc(blobID)
+	}
+	return p
+}
+
+func uploadTokenHeader(uploadToken string) map[string]string {
+	return map[string]string{"X-Upload-Token": uploadToken}
+}
+
+// InitShareUpload starts an upload through an upload link (access unlocks a password-protected one).
+func (c *Client) InitShareUpload(ctx context.Context, token, access string, req UploadRequest) (*ShareUploadInit, error) {
+	var r ShareUploadInit
+	return &r, c.doH(ctx, http.MethodPost, shareUploadPath(token, ""), accessHeader(access), req, &r)
+}
+
+func (c *Client) SharePartURLs(ctx context.Context, token, blobID, uploadToken string, numbers []int) (map[string]string, error) {
+	var r struct {
+		URLs map[string]string `json:"urls"`
+	}
+	err := c.doH(ctx, http.MethodPost, shareUploadPath(token, blobID)+"/parts", uploadTokenHeader(uploadToken),
+		map[string][]int{"part_numbers": numbers}, &r)
+	return r.URLs, err
+}
+
+func (c *Client) CompleteShareUpload(ctx context.Context, token, blobID, uploadToken string, parts []Part) (*ShareUploaded, error) {
+	body := map[string]any{}
+	if parts != nil {
+		body["parts"] = parts
+	}
+	var r ShareUploaded
+	return &r, c.doH(ctx, http.MethodPost, shareUploadPath(token, blobID)+"/complete", uploadTokenHeader(uploadToken), body, &r)
+}
+
+func (c *Client) AbortShareUpload(ctx context.Context, token, blobID, uploadToken string) error {
+	return c.doH(ctx, http.MethodDelete, shareUploadPath(token, blobID), uploadTokenHeader(uploadToken), nil, nil)
+}

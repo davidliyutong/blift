@@ -3,7 +3,7 @@ import { all, chunks, now, one, placeholders, stmt, type DB, type Stmt } from ".
 import type { Ctx } from "../env";
 import { b64decode, b64encode } from "../lib/crypto";
 import { badRequest, forbidden, notFound } from "../lib/errors";
-import { likeArg, publicOrigin } from "../lib/http";
+import { likeArg } from "../lib/http";
 import { userRef } from "./users";
 
 export type MemberRole = "owner" | "editor" | "viewer";
@@ -18,8 +18,6 @@ export type ProjectRow = {
   used_bytes: number;
   blob_count: number;
   status: "active" | "deleting";
-  /** Set while the inbox (anonymous uploads at /i/<token>) is enabled. */
-  inbox_token: string | null;
   created_at: number;
   updated_at: number;
   owner_username: string | null;
@@ -38,7 +36,6 @@ export const PROJECT_SELECT = `
   LEFT JOIN users o ON o.id = p.owner_id
   LEFT JOIN storages st ON st.id = p.storage_id`;
 
-/** The inbox link is shown to members who may upload anyway (editors and owners). */
 export function toProject(c: Ctx, p: ProjectRow) {
   return {
     id: p.id,
@@ -51,8 +48,6 @@ export function toProject(c: Ctx, p: ProjectRow) {
     storage_location: p.storage_location ?? "",
     used_bytes: p.used_bytes,
     blob_count: p.blob_count,
-    inbox_enabled: !!p.inbox_token,
-    inbox_url: p.inbox_token && RANK[p.role] >= RANK.editor ? `${publicOrigin(c)}/i/${p.inbox_token}` : null,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };
@@ -125,7 +120,7 @@ export type BlobRow = {
   part_size: number | null;
   overwrite: number;
   uploader_id: string | null;
-  /** Uploaded anonymously through the project's inbox. */
+  /** Uploaded anonymously through an upload link (a share with mode 'upload'). */
   via_inbox: number;
   download_count: number;
   created_at: number;

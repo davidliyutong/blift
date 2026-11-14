@@ -45,7 +45,9 @@ go test ./... && go vet ./...
 | `blift mv <项目> <文件> <新名称>` | 重命名文件 |
 | `blift url <项目> <文件>` | 输出预签名下载链接（1 小时有效） |
 | `blift share create <项目> [文件] [--password P] [--expires 7d] [--max-downloads N]` | 创建分享（不指定文件即分享整个项目）；分享单个文件且不设密码时，还会输出可用于 `wget` / `curl` 的直接下载链接 |
-| `blift share ls [项目]` / `share rm <分享ID>` | 列出 / 删除分享 |
+| `blift share create <项目> --upload [--password P] [--expires 7d] [--max-uploads N] [--max-size 10G]` | 创建收件箱：拿到链接的人都能向项目上传文件，但看不到项目里的任何文件 |
+| `blift share put <收件箱链接或token> <文件>... [--password P] [--name N] [-j 4]` | 免登录通过收件箱链接上传（重名时自动编号） |
+| `blift share ls [项目]` / `share rm <分享ID>` | 列出 / 删除分享（含类型和使用情况） |
 | `blift share get <分享链接或token> [文件...] [--password P] [-o 目录]` | 免登录从分享链接下载（直接下载链接只下载对应的文件） |
 | `blift update [--check] [--version X.Y.Z] [--force]` | 原地更新到最新版本（别名 `upgrade`） |
 

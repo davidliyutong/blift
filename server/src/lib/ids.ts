@@ -24,7 +24,7 @@ export const newId = () => randomString(16, B32);
 export const newToken = () => `blift_${randomString(32)}`;
 /** API key for `blift login --api-key` (only its SHA-256 is stored). */
 export const newApiKey = () => `bliftk_${randomString(32)}`;
-/** Public share slug (/s/<token>) and inbox slug (/i/<token>). */
+/** Public share slug (/s/<token>). */
 export const newShareToken = () => randomString(12);
 /** CLI device-flow code, e.g. WDJB-MJHT. */
 export const newUserCode = () => {

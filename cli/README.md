@@ -51,7 +51,9 @@ go test ./... && go vet ./...
 | `blift mv <project> <file> <new-name>` | Rename a file |
 | `blift url <project> <file>` | Print a presigned download URL (valid for 1 hour) |
 | `blift share create <project> [file] [--password P] [--expires 7d] [--max-downloads N]` | Create a share (the whole project when no file is given); for a file without a password it also prints a direct link for `wget` / `curl` |
-| `blift share ls [project]` / `share rm <share-id>` | List / delete shares |
+| `blift share create <project> --upload [--password P] [--expires 7d] [--max-uploads N] [--max-size 10G]` | Create an inbox: anyone with the link can upload into the project but sees nothing in it |
+| `blift share put <inbox-url-or-token> <file>... [--password P] [--name N] [-j 4]` | Upload through an inbox link without signing in (a name that is taken gets a number) |
+| `blift share ls [project]` / `share rm <share-id>` | List / delete shares (with their type and usage) |
 | `blift share get <share-url-or-token> [file...] [--password P] [-o dir]` | Download from a share link without signing in (a direct link downloads just its file) |
 | `blift update [--check] [--version X.Y.Z] [--force]` | Update in place to the latest release (alias `upgrade`) |
 

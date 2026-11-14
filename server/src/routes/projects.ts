@@ -4,7 +4,7 @@ import { all, now, one, run, stmt } from "../db";
 import type { AppEnv } from "../env";
 import { badRequest, conflict, forbidden, notConfigured, notFound } from "../lib/errors";
 import { body, oneOf, projectName, str } from "../lib/http";
-import { newId, newShareToken } from "../lib/ids";
+import { newId } from "../lib/ids";
 import { deleteProjectStmts, loadProject, PROJECT_SELECT, toProject, type ProjectRow } from "../services/projects";
 
 const r = new Hono<AppEnv>();
@@ -59,8 +59,6 @@ r.patch("/:id", async (c) => {
   const b = await body(c);
   const name = b.name === undefined ? p.name : projectName(b.name);
   const description = typeof b.description === "string" ? b.description.trim().slice(0, 1000) : p.description;
-  if (b.inbox_enabled !== undefined && typeof b.inbox_enabled !== "boolean") throw badRequest("inbox_enabled must be a boolean");
-  const inbox = b.inbox_enabled === undefined ? p.inbox_token : b.inbox_enabled ? (p.inbox_token ?? newShareToken()) : null;
   if (
     name.toLowerCase() !== p.name.toLowerCase() &&
     (await one(c.env.DB, "SELECT 1 AS x FROM projects WHERE owner_id = ? AND name = ? COLLATE NOCASE AND status = 'active'", p.owner_id, name))
@@ -68,21 +66,12 @@ r.patch("/:id", async (c) => {
     throw nameTaken();
   await run(
     c.env.DB,
-    "UPDATE projects SET name = ?, description = ?, inbox_token = ?, updated_at = ? WHERE id = ?",
+    "UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?",
     name,
     description,
-    inbox,
     now(),
     p.id,
   );
-  return c.json(toProject(c, await loadProject(c, p.id, "viewer")));
-});
-
-// A new inbox link; the old one stops working.
-r.post("/:id/inbox/reset", async (c) => {
-  const p = await loadProject(c, c.req.param("id"), "owner");
-  if (!p.inbox_token) throw conflict("conflict", "the inbox is disabled");
-  await run(c.env.DB, "UPDATE projects SET inbox_token = ? WHERE id = ?", newShareToken(), p.id);
   return c.json(toProject(c, await loadProject(c, p.id, "viewer")));
 });
 

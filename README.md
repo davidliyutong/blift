@@ -31,8 +31,10 @@ and bookkeeping.
 - **Sharing.** Public links for a single file or a whole project, with optional password,
   expiry and download limit; recipients need no account, and `wget` / `curl` download straight
   from the link.
-- **Inbox.** A project can take anonymous uploads through a link (off by default): senders need no
-  account and see nothing in the project; a name that is taken gets a number instead of replacing.
+- **Inbox.** Upload links (choose "Inbox" when creating a share link) let anyone add files to a
+  project, with a password, expiry and limits on the number of files and their total size; senders
+  need no account and see nothing in the project, and a name that is taken gets a number instead
+  of replacing.
 - **Single sign-on.** OIDC with PKCE, tuned for Authentik; HS256, RS256 and ES256 ID tokens;
   users are created on first sign-in and an IdP group can grant the admin role.
 - **Security.** TOTP two-factor authentication, one-off bootstrap secret for the first admin,
@@ -40,7 +42,8 @@ and bookkeeping.
 - **Administration.** Dashboard with usage, request and traffic charts; user management with
   per-user quotas; storage backends and SSO configured online.
 - **CLI.** Browser-based login (device flow) or API keys for unattended installs, project and member management, parallel
-  uploads/downloads, share links, password-protected share downloads without an account.
+  uploads/downloads, share links, password-protected share downloads and inbox uploads without an
+  account.
   Static binaries for Linux and macOS on amd64 and arm64.
 - **Garbage collection.** Stale uploads, deleted files and projects, expired sessions and
   shares are cleaned up on a schedule within Cloudflare's subrequest limits.

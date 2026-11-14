@@ -84,6 +84,27 @@ cmp "$WORK/up/big.bin" "$WORK/shared/big.bin" || fail "shared big.bin differs"
 "$BLIFT" share ls demo | grep -q pw1234 && fail "password leaked in share ls"
 ok "share create (password) + anonymous share get"
 
+# Inboxes (upload links): created like any share, listed with their limits, nothing to download.
+INBOX=$("$BLIFT" share create demo --upload --max-uploads 3 --max-size 10M 2>/dev/null) || fail "share create --upload"
+"$BLIFT" share ls demo | grep -F "$INBOX" | grep -q "0/3 · 0 B/10.0 MiB" || fail "inbox in share ls: $("$BLIFT" share ls demo)"
+"$BLIFT" share get "$INBOX" -o "$WORK/inbox" 2>/dev/null && fail "share get on an inbox"
+"$BLIFT" share create demo greeting.txt --upload 2>/dev/null && fail "--upload with a file"
+ok "share create --upload (inbox), share ls usage, share get refuses it"
+
+# Uploading through an inbox needs no login: a taken name gets a number, the limits hold.
+printf 'dropped off\n' >"$WORK/note.txt"
+"$BLIFT" share put "$INBOX" "$WORK/note.txt" "$WORK/note.txt" 2>"$WORK/put.err" || fail "share put: $(cat "$WORK/put.err")"
+grep -q 'note (1).txt' "$WORK/put.err" || fail "share put rename: $(cat "$WORK/put.err")"
+"$BLIFT" download demo "note (1).txt" -o "$WORK/note-back.txt" -q && cmp "$WORK/note.txt" "$WORK/note-back.txt" || fail "inbox file content"
+"$BLIFT" share put "$INBOX" "$WORK/note.txt" "$WORK/note.txt" "$WORK/note.txt" 2>"$WORK/put.err" && fail "share put past the file limit"
+grep -q 'reached its limit' "$WORK/put.err" && grep -q '2 of 3 file(s) failed' "$WORK/put.err" || fail "share put limit: $(cat "$WORK/put.err")"
+"$BLIFT" share ls demo | grep -F "$INBOX" | grep -q "3/3" || fail "inbox usage after share put"
+PINBOX=$("$BLIFT" share create demo --upload --password pw5678 2>/dev/null) || fail "share create --upload --password"
+"$BLIFT" share put "$PINBOX" "$WORK/note.txt" </dev/null 2>/dev/null && fail "share put without the password"
+"$BLIFT" -q share put "$PINBOX" "$WORK/note.txt" --password pw5678 || fail "share put with the password"
+"$BLIFT" share put "$URL" "$WORK/note.txt" --password pw1234 2>/dev/null && fail "share put on a download link"
+ok "share put: anonymous, auto-rename, file limit, password, refuses download links"
+
 # Direct links: plain curl and wget save the file under its own name; share get takes them too.
 "$BLIFT" share create demo greeting.txt >"$WORK/share.out" 2>"$WORK/share.err"
 DIRECT=$(grep -oE 'https?://[^ ]+/s/[0-9A-Za-z]+/greeting\.txt' "$WORK/share.err")

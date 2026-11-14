@@ -17,9 +17,64 @@ import (
 
 type UploadOptions struct {
 	Name      string // blob name; default: base name of the file
-	Overwrite bool
-	Jobs      int // parallel part uploads (multipart only)
+	Overwrite bool   // projects only: upload links never replace a file
+	Jobs      int    // parallel part uploads (multipart only)
 	Progress  Progress
+}
+
+// target is where an upload's API calls go: a project (signed in) or an upload link.
+type target interface {
+	init(ctx context.Context, req api.UploadRequest) (*api.UploadInit, error)
+	partURLs(ctx context.Context, blobID string, numbers []int) (map[string]string, error)
+	complete(ctx context.Context, blobID string, parts []api.Part) error
+	abort(ctx context.Context, blobID string) error
+}
+
+type projectTarget struct {
+	c         *api.Client
+	projectID string
+	blob      *api.Blob // set by complete
+}
+
+func (t *projectTarget) init(ctx context.Context, req api.UploadRequest) (*api.UploadInit, error) {
+	return t.c.InitUpload(ctx, t.projectID, req)
+}
+func (t *projectTarget) partURLs(ctx context.Context, blobID string, numbers []int) (map[string]string, error) {
+	return t.c.PartURLs(ctx, blobID, numbers)
+}
+func (t *projectTarget) complete(ctx context.Context, blobID string, parts []api.Part) (err error) {
+	t.blob, err = t.c.CompleteUpload(ctx, blobID, parts)
+	return err
+}
+func (t *projectTarget) abort(ctx context.Context, blobID string) error {
+	return t.c.AbortUpload(ctx, blobID)
+}
+
+// linkTarget uploads through an upload link: init hands out the upload token that authorizes
+// the later calls of that one upload.
+type linkTarget struct {
+	c                          *api.Client
+	token, access, uploadToken string
+	done                       *api.ShareUploaded // set by complete
+}
+
+func (t *linkTarget) init(ctx context.Context, req api.UploadRequest) (*api.UploadInit, error) {
+	r, err := t.c.InitShareUpload(ctx, t.token, t.access, req)
+	if err != nil {
+		return nil, err
+	}
+	t.uploadToken = r.UploadToken
+	return &r.UploadInit, nil
+}
+func (t *linkTarget) partURLs(ctx context.Context, blobID string, numbers []int) (map[string]string, error) {
+	return t.c.SharePartURLs(ctx, t.token, blobID, t.uploadToken, numbers)
+}
+func (t *linkTarget) complete(ctx context.Context, blobID string, parts []api.Part) (err error) {
+	t.done, err = t.c.CompleteShareUpload(ctx, t.token, blobID, t.uploadToken, parts)
+	return err
+}
+func (t *linkTarget) abort(ctx context.Context, blobID string) error {
+	return t.c.AbortShareUpload(ctx, t.token, blobID, t.uploadToken)
 }
 
 // ContentType guesses the MIME type from the file extension.
@@ -30,17 +85,36 @@ func ContentType(name string) string {
 	return "application/octet-stream"
 }
 
-// Upload sends one local file to a project: init → single PUT or multipart → complete.
-// On any failure (including ctx cancellation) the pending upload is aborted.
-func Upload(ctx context.Context, c *api.Client, projectID, path string, o UploadOptions) (_ *api.Blob, err error) {
+// Upload sends one local file to a project.
+func Upload(ctx context.Context, c *api.Client, projectID, path string, o UploadOptions) (*api.Blob, error) {
+	t := &projectTarget{c: c, projectID: projectID}
+	if err := upload(ctx, t, path, o); err != nil {
+		return nil, err
+	}
+	return t.blob, nil
+}
+
+// UploadToLink sends one local file through an upload link (share token; access unlocks a
+// password-protected link). The result has the file's final name: a name that is taken gets a number.
+func UploadToLink(ctx context.Context, c *api.Client, token, access, path string, o UploadOptions) (*api.ShareUploaded, error) {
+	t := &linkTarget{c: c, token: token, access: access}
+	if err := upload(ctx, t, path, o); err != nil {
+		return nil, err
+	}
+	return t.done, nil
+}
+
+// upload: init → single PUT or multipart → complete. On any failure (including ctx
+// cancellation) the pending upload is aborted.
+func upload(ctx context.Context, t target, path string, o UploadOptions) (err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	name := o.Name
 	if name == "" {
@@ -48,15 +122,15 @@ func Upload(ctx context.Context, c *api.Client, projectID, path string, o Upload
 	}
 	ct, size, prog := ContentType(name), st.Size(), orNop(o.Progress)
 
-	up, err := c.InitUpload(ctx, projectID, api.UploadRequest{Name: name, Size: size, ContentType: ct, Overwrite: o.Overwrite})
+	up, err := t.init(ctx, api.UploadRequest{Name: name, Size: size, ContentType: ct, Overwrite: o.Overwrite})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() {
 		if err != nil {
 			actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 			defer cancel()
-			_ = c.AbortUpload(actx, up.BlobID)
+			_ = t.abort(actx, up.BlobID)
 		}
 	}()
 
@@ -65,14 +139,14 @@ func Upload(ctx context.Context, c *api.Client, projectID, path string, o Upload
 	case "single":
 		_, err = put(ctx, up.URL, f, 0, size, ct, prog)
 	case "multipart":
-		parts, err = uploadParts(ctx, c, up, f, size, max(o.Jobs, 1), prog)
+		parts, err = uploadParts(ctx, t, up, f, size, max(o.Jobs, 1), prog)
 	default:
 		err = fmt.Errorf("unknown upload mode %q", up.Mode)
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return c.CompleteUpload(ctx, up.BlobID, parts)
+	return t.complete(ctx, up.BlobID, parts)
 }
 
 // put uploads bytes [off, off+n) of f to a presigned URL with retries and returns the ETag.
@@ -105,7 +179,7 @@ func put(ctx context.Context, url string, f io.ReaderAt, off, n int64, ct string
 }
 
 // uploadParts fetches part URLs in batches of ≤100 and PUTs the parts with `jobs` workers.
-func uploadParts(ctx context.Context, c *api.Client, up *api.UploadInit, f io.ReaderAt, size int64, jobs int, prog Progress) ([]api.Part, error) {
+func uploadParts(ctx context.Context, t target, up *api.UploadInit, f io.ReaderAt, size int64, jobs int, prog Progress) ([]api.Part, error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
@@ -144,7 +218,7 @@ feed:
 		for n := start; n <= min(start+99, up.PartCount); n++ {
 			nums = append(nums, n)
 		}
-		urls, err := c.PartURLs(ctx, up.BlobID, nums)
+		urls, err := t.partURLs(ctx, up.BlobID, nums)
 		if err != nil {
 			cancel(err)
 			break
