@@ -129,7 +129,7 @@ export const zh: Dict = {
   "login.mfaSubtitle": "请输入身份验证器应用中的 6 位验证码。",
   "login.mfaCode": "验证码",
   "login.verify": "验证",
-  "login.useOther": "使用其他账户登录",
+  "login.useOther": "使用其他账户",
   "login.localOnly": "本地账户仅供管理员使用，普通用户请使用 SSO 登录。",
   "login.noSso": "尚未配置单点登录。",
 
