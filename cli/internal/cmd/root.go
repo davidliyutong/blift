@@ -81,7 +81,7 @@ func newRoot() *cobra.Command {
 	root.AddCommand(
 		loginCmd(), logoutCmd(), whoamiCmd(), versionCmd(),
 		projectCmd(), lsCmd(), cpCmd(), mvCmd(), rmCmd(), mkdirCmd(), treeCmd(), statCmd(), catCmd(), urlCmd(),
-		uploadCmd(), downloadCmd(),
+		uploadCmd(), downloadCmd(), browseCmd(),
 		shareCmd(), updateCmd(),
 	)
 	return root

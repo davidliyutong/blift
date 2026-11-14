@@ -20,6 +20,9 @@ All notable changes are documented here. The format follows
   Files uploaded this way pass through the server: on Cloudflare Workers they are limited to
   100 MB each. Deployments on Workers need `/dav` and `/dav/*` in `run_worker_first` (see
   `server/wrangler.toml`; `make cf-config` writes it).
+- `blift browse [project[:path]]`: a full-screen browser with the server on one side and this
+  machine on the other (three columns, vim keys). Yank on one side and paste on the other to
+  upload or download, folders included; cut and paste on the server moves. `?` lists the keys.
 - Folders in the CLI. Places are written `project:path` (`demo:docs/a.pdf`), as with scp and
   rclone. New commands: `blift cp` (uploads and downloads, `-r` for whole trees, `-P` files at
   a time), `mkdir [-p]`, `tree`, `stat` and `cat`. `ls` lists a folder (`-r` for everything

@@ -170,7 +170,8 @@ The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). 
 - Entry point `cmd/blift`; commands in `internal/cmd`, the HTTP client in `internal/api`, the
   transfer engine in `internal/transfer`, messages in `internal/i18n` (one English and one Chinese
   map with identical keys).
-- Keep dependencies minimal (cobra, x/term). It must cross-compile with `CGO_ENABLED=0` for
+- Keep dependencies few: cobra, x/term, and bubbletea + lipgloss for `blift browse`
+  (`internal/cmd/browse.go`; pure Go). It must cross-compile with `CGO_ENABLED=0` for
   linux/darwin × amd64/arm64 (`make cli-all`).
 - Config lives in `$XDG_CONFIG_HOME/blift/config.json` (0600); `BLIFT_SERVER` / `BLIFT_TOKEN` /
   `BLIFT_LANG` override it.
