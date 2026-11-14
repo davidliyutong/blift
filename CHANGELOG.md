@@ -17,6 +17,7 @@ All notable changes are documented here. The format follows
   page: its auto-submit clicked "Sign in with a different account", which signed the session out.
   That link is now outside the code form and renamed "Use a different account", and the code
   form submits itself once six digits are entered.
+- The breadcrumb link back to the project list ("Projects") reloaded the current page instead.
 
 ## [0.2.0] - 2026-11-11
 
