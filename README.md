@@ -24,6 +24,8 @@ and bookkeeping.
 
 - **Projects and folders.** A project holds files in folders, up to 16 levels deep. Moving or
   renaming a folder is instant however much it holds, and a folder can be shared like a file.
+- **WebDAV.** Turn it on per project and point Zotero, OmniFocus or a file manager at
+  `/dav/<owner>/<project>/`, signing in with a WebDAV password instead of your account password.
 - **Direct transfers.** Presigned single `PUT` up to 64 MiB, parallel multipart uploads above
   that (each part retried on its own), parallel ranged downloads in the CLI.
 - **Any S3-compatible storage.** Several backends side by side, chosen per project (an optional

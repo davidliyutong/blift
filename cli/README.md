@@ -48,6 +48,7 @@ go test ./... && go vet ./...
 | `blift cp [-r] <source>... <destination> [--overwrite] [-j 4] [-P 4]` | Copy between local paths and `project:path`: uploads and downloads, files and whole trees (see below) |
 | `blift mv <project:path>... <project:path>` | Move or rename inside a project, like `mv` (alias `rename`); a folder moves with everything in it, at once |
 | `blift rm [-r] <project:path>... [-y]` | Delete files, or folders with `-r` |
+| `blift browse [project[:path]]` | Full-screen browser (alias `tui`): the server on one side, this machine on the other; yank (`y`) on one side and paste (`p`) on the other to upload or download, `x` then `p` on the server to move, `?` for all keys |
 | `blift mkdir [-p] <project:path>...` | Create folders (`-p`: with missing parents) |
 | `blift tree <project[:path]> [-L depth]` | Show a project or folder as a tree |
 | `blift stat <project:path>` / `cat <project:path>` | Details of a file or folder / print a file to stdout |
