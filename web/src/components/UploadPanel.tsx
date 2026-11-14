@@ -107,7 +107,11 @@ export function UploadRow({ item, manager, subtitle }: { item: UploadItem; manag
             {item.name}
           </span>
         </div>
-        {subtitle !== "" && <div className="mt-0.5 truncate text-xs text-kumo-subtle">{subtitle ?? item.projectName}</div>}
+        {subtitle !== "" && (
+          <div className="mt-0.5 truncate text-xs text-kumo-subtle">
+            {subtitle ?? (item.dir ? `${item.projectName}/${item.dir}` : item.projectName)}
+          </div>
+        )}
         {running && (
           <Meter label={statusText} value={pct} customValue={`${pct}%`} className="mt-2" />
         )}

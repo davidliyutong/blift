@@ -22,7 +22,8 @@ and bookkeeping.
 
 ## Features
 
-- **Flat by design.** Projects contain files, nothing more: no folder trees to manage.
+- **Projects and folders.** A project holds files in folders, up to 16 levels deep. Moving or
+  renaming a folder is instant however much it holds, and a folder can be shared like a file.
 - **Direct transfers.** Presigned single `PUT` up to 64 MiB, parallel multipart uploads above
   that (each part retried on its own), parallel ranged downloads in the CLI.
 - **Any S3-compatible storage.** Several backends side by side, chosen per project (an optional

@@ -8,7 +8,11 @@ All notable changes are documented here. The format follows
 
 ### Added
 
-- **Directories** (server and API; the web UI and the CLI follow). A project is now a tree, up to
+- Folders in the web UI: browse a project folder by folder (breadcrumbs, folders first), create
+  folders, upload a folder (picker or drag and drop; its structure is kept), move files and
+  folders, share a folder as a download link or an inbox, and browse shared folders on the share
+  page. Search still covers the whole project and shows where each file is.
+- **Directories** (server and API; the CLI follows). A project is now a tree, up to
   16 levels deep: `POST /api/projects/:id/dirs` (like `mkdir`, or `mkdir -p` with `parents`),
   uploads take a `parent_id`, `GET …/blobs?path=` / `?parent_id=` lists one directory
   (directories first) and `GET …/stat?path=` resolves a path. `PATCH /api/blobs/:id` moves as

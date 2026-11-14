@@ -102,14 +102,18 @@ export function SharesTable({
                       <div className="flex min-w-0 items-center gap-2.5">
                         {s.mode === "upload" ? (
                           <TrayArrowDownIcon size={18} weight="duotone" className="shrink-0 text-kumo-brand" />
-                        ) : s.blob_name ? (
+                        ) : s.blob_name && s.blob_kind !== "dir" ? (
                           <FileIcon name={s.blob_name} type="" />
                         ) : (
                           <FolderSimpleIcon size={18} weight="duotone" className="shrink-0 text-kumo-subtle" />
                         )}
                         <div className="min-w-0">
                           <div className="truncate font-medium">
-                            {s.mode === "upload" ? t("share.inbox") : (s.blob_name ?? t("share.wholeProject"))}
+                            {s.mode === "upload"
+                              ? s.blob_path
+                                ? `${t("share.inbox")} · ${s.blob_path}`
+                                : t("share.inbox")
+                              : (s.blob_path ?? t("share.wholeProject"))}
                           </div>
                           {showProject && (
                             <Link

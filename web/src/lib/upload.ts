@@ -6,6 +6,9 @@ export interface UploadItem {
   id: string;
   projectId: string;
   projectName: string;
+  /** The directory it goes into (null = the project's root) and that directory's path, for display. */
+  parentId: string | null;
+  dir: string;
   file: File;
   name: string;
   total: number;
@@ -20,7 +23,10 @@ type DoneListener = (projectId: string) => void;
 
 /** Where a queue sends its API calls: a project (signed in) or an upload link (anonymous). */
 export interface UploadApi {
-  init(projectId: string, body: { name: string; size: number; content_type: string; overwrite?: boolean }): Promise<UploadInit>;
+  init(
+    projectId: string,
+    body: { name: string; size: number; content_type: string; overwrite?: boolean; parent_id?: string | null },
+  ): Promise<UploadInit>;
   parts(blobId: string, partNumbers: number[]): Promise<{ urls: Record<string, string> }>;
   /** Resolves to the file's final name (upload-link uploads get a free name instead of replacing). */
   complete(blobId: string): Promise<{ name: string }>;
@@ -43,8 +49,8 @@ export function shareUploadApi(token: string, access?: string): UploadApi {
   const tokens = new Map<string, string>();
   const tok = (blobId: string) => tokens.get(blobId) ?? "";
   return {
-    init: async (_projectId, body) => {
-      const r = await up.init(token, access, body);
+    init: async (_projectId, { name, size, content_type }) => {
+      const r = await up.init(token, access, { name, size, content_type });
       tokens.set(r.blob_id, r.upload_token);
       return r;
     },
@@ -91,11 +97,14 @@ export class UploadManager {
     return () => void this.doneListeners.delete(fn);
   }
 
-  add(projectId: string, projectName: string, files: File[]) {
+  /** Queues files for a directory of a project (`into`; default: the root). */
+  add(projectId: string, projectName: string, files: File[], into: { id: string | null; path: string } = { id: null, path: "" }) {
     const added = files.map<UploadItem>((file) => ({
       id: crypto.randomUUID(),
       projectId,
       projectName,
+      parentId: into.id,
+      dir: into.path,
       file,
       name: file.name,
       total: file.size,
@@ -147,7 +156,7 @@ export class UploadManager {
     let blobId: string | undefined;
     try {
       const contentType = item.file.type || "application/octet-stream";
-      const body = { name: item.name, size: item.file.size, content_type: contentType };
+      const body = { name: item.name, size: item.file.size, content_type: contentType, parent_id: item.parentId };
       let init;
       try {
         init = await this.api.init(item.projectId, body);

@@ -1,7 +1,8 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useParams } from "react-router";
 import { Badge, Banner, Button, LinkButton, SensitiveInput } from "@cloudflare/kumo";
 import {
+  CaretRightIcon,
   ClockCountdownIcon,
   DownloadSimpleIcon,
   FolderSimpleIcon,
@@ -30,7 +31,9 @@ export function PublicSharePage() {
   const { info } = useSession();
   const { token = "" } = useParams();
   const [access, setAccess] = useState(() => sessionStorage.getItem(accessKey(token)) ?? undefined);
-  const res = useAsync(() => api.public.share(token, access, { limit: PAGE }), [token, access]);
+  // The folder of a project or folder share being looked at; undefined = the top of the share.
+  const [dirId, setDirId] = useState<string>();
+  const res = useAsync(() => api.public.share(token, access, { parent_id: dirId, limit: PAGE }), [token, access, dirId]);
   const [unlocking, setUnlocking] = useState(false);
   const [unlockError, setUnlockError] = useState<unknown>(null);
   // Pages loaded after the first one, and where to continue.
@@ -43,7 +46,7 @@ export function PublicSharePage() {
     setLoadingMore(true);
     setMoreError(null);
     try {
-      const r = await api.public.share(token, access, { cursor, limit: PAGE });
+      const r = await api.public.share(token, access, { parent_id: dirId, cursor, limit: PAGE });
       setMore((m) => ({ blobs: [...(m?.blobs ?? []), ...(r.blobs ?? [])], cursor: r.next_cursor ?? null }));
     } catch (err) {
       setMoreError(err);
@@ -158,8 +161,9 @@ export function PublicSharePage() {
 
   const blobs = res.data.blobs && [...res.data.blobs, ...(more?.blobs ?? [])];
   const cursor = more ? more.cursor : (res.data.next_cursor ?? null);
-  const fileCount = share.file_count ?? blobs?.length ?? 0;
-  const totalBytes = share.total_bytes ?? (blobs ?? []).reduce((s, b) => s + b.size, 0);
+  const dir = res.data.dir;
+  const crumbs = dir && dir.id ? [...dir.parents, { id: dir.id, name: dir.path.split("/").pop()! }] : [];
+  const crumbClass = "cursor-pointer truncate bg-transparent p-0 font-[inherit] text-kumo-subtle hover:text-kumo-link hover:underline";
   const href = (blobId: string) => api.public.downloadHref(token, blobId, access);
 
   if (share.kind === "blob" && blobs?.length === 1) {
@@ -190,36 +194,72 @@ export function PublicSharePage() {
           <FolderSimpleIcon size={36} weight="duotone" className="text-kumo-brand" />
           <h1 className="m-0 text-xl font-semibold break-all">{share.name}</h1>
           <span className="text-sm text-kumo-subtle">
-            {t("pub.files", { n: fileCount, size: formatBytes(totalBytes) })}
+            {share.file_count != null && share.total_bytes != null
+              ? t("pub.files", { n: share.file_count, size: formatBytes(share.total_bytes) })
+              : t("pub.folder")}
           </span>
           {meta}
         </div>
+        {crumbs.length > 0 && (
+          <nav className="flex min-w-0 flex-wrap items-center gap-1.5 border-b border-kumo-line px-6 py-3 text-sm">
+            <button type="button" className={crumbClass} onClick={() => setDirId(undefined)}>
+              {share.name}
+            </button>
+            {crumbs.map((c, i) => (
+              <Fragment key={c.id}>
+                <CaretRightIcon size={12} className="shrink-0 text-kumo-subtle" />
+                {i === crumbs.length - 1 ? (
+                  <span className="truncate font-medium">{c.name}</span>
+                ) : (
+                  <button type="button" className={crumbClass} onClick={() => setDirId(c.id)}>
+                    {c.name}
+                  </button>
+                )}
+              </Fragment>
+            ))}
+          </nav>
+        )}
         {blobs && blobs.length > 0 ? (
           <ul className="m-0 list-none divide-y divide-kumo-hairline p-0">
-            {blobs.map((b) => (
-              <li key={b.id} className="flex items-center gap-3 px-6 py-3">
-                <FileIcon name={b.name} type={b.content_type} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium" title={b.name}>
-                    {b.name}
+            {blobs.map((b) =>
+              b.kind === "dir" ? (
+                <li key={b.id}>
+                  <button
+                    type="button"
+                    onClick={() => setDirId(b.id)}
+                    className="flex w-full cursor-pointer items-center gap-3 bg-transparent px-6 py-3 text-left font-[inherit] text-kumo-default hover:bg-kumo-recessed"
+                  >
+                    <FolderSimpleIcon size={18} weight="duotone" className="shrink-0 text-kumo-brand" />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium" title={b.name}>
+                      {b.name}
+                    </span>
+                    <CaretRightIcon size={14} className="shrink-0 text-kumo-subtle" />
+                  </button>
+                </li>
+              ) : (
+                <li key={b.id} className="flex items-center gap-3 px-6 py-3">
+                  <FileIcon name={b.name} type={b.content_type} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium" title={b.name}>
+                      {b.name}
+                    </div>
+                    <div className="text-xs text-kumo-subtle">{formatBytes(b.size)}</div>
                   </div>
-                  <div className="text-xs text-kumo-subtle">{formatBytes(b.size)}</div>
-                </div>
-                <LinkButton href={href(b.id)} size="sm" variant="secondary" icon={DownloadSimpleIcon}>
-                  {t("common.download")}
-                </LinkButton>
-              </li>
-            ))}
+                  <LinkButton href={href(b.id)} size="sm" variant="secondary" icon={DownloadSimpleIcon}>
+                    {t("common.download")}
+                  </LinkButton>
+                </li>
+              ),
+            )}
           </ul>
         ) : (
-          <p className="m-0 px-6 py-10 text-center text-sm text-kumo-subtle">{t("pub.empty")}</p>
+          <p className="m-0 px-6 py-10 text-center text-sm text-kumo-subtle">{t(crumbs.length ? "pub.emptyDir" : "pub.empty")}</p>
         )}
         {cursor && blobs && (
           <div className="flex flex-col items-center gap-3 border-t border-kumo-line px-6 py-4">
             {moreError != null && (
               <Banner variant="error" icon={<WarningCircleIcon weight="fill" />} title={errMsg(moreError)} />
             )}
-            <span className="text-xs text-kumo-subtle">{t("pub.shown", { n: blobs.length, total: fileCount })}</span>
             <Button variant="secondary" loading={loadingMore} onClick={() => loadMore(cursor)}>
               {t("pub.loadMore")}
             </Button>

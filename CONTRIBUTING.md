@@ -138,7 +138,7 @@ anything else.
   presigned URLs from anything you paste.
 - **Feature requests** describe the use case first: who needs it, what they do today and why that
   is not good enough, then the proposal and the alternatives considered. Check the product
-  boundaries in AGENTS.md: folders, billing, rate limiting and routing file traffic through the
+  boundaries in AGENTS.md: nested projects, billing, rate limiting and routing file traffic through the
   server are out of scope.
 - Search existing issues before opening a new one, and keep one problem per issue.
 

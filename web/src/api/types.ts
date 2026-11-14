@@ -82,6 +82,14 @@ export interface Blob {
   updated_at: number;
 }
 
+/** A page of a listing: `dir` for a directory listing, `total` for the listing of all files. */
+export interface BlobPage {
+  dir?: DirInfo;
+  blobs: Blob[];
+  total?: number;
+  next_cursor: string | null;
+}
+
 export interface Member {
   user: UserWithEmail;
   role: ProjectRole;
