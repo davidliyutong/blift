@@ -127,7 +127,7 @@ export const en = {
   "login.mfaSubtitle": "Enter the 6-digit code from your authenticator app.",
   "login.mfaCode": "Verification code",
   "login.verify": "Verify",
-  "login.useOther": "Sign in with a different account",
+  "login.useOther": "Use a different account",
   "login.localOnly": "Local accounts are for administrators. Regular users sign in with SSO.",
   "login.noSso": "Single sign-on is not configured yet.",
 
