@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -17,6 +19,7 @@ import (
 	"github.com/davidliyutong/blift/cli/internal/api"
 	"github.com/davidliyutong/blift/cli/internal/config"
 	"github.com/davidliyutong/blift/cli/internal/i18n"
+	"github.com/davidliyutong/blift/cli/internal/transfer"
 	"github.com/davidliyutong/blift/cli/internal/ui"
 )
 
@@ -26,7 +29,7 @@ func shareCmd() *cobra.Command {
 		Aliases: []string{"shares"},
 		Short:   i18n.T("cmd.share"),
 	}
-	c.AddCommand(shareCreateCmd(), shareLsCmd(), shareRmCmd(), shareGetCmd())
+	c.AddCommand(shareCreateCmd(), shareLsCmd(), shareRmCmd(), shareGetCmd(), sharePutCmd())
 	return c
 }
 
@@ -290,18 +293,119 @@ func shareGetCmd() *cobra.Command {
 	return c
 }
 
-// openShare fetches a public share, unlocking it with the password (prompting on a
-// terminal when none was given) if it is locked. It returns the X-Share-Access token.
+func sharePutCmd() *cobra.Command {
+	var password, name string
+	var jobs int
+	c := &cobra.Command{
+		Use:               "put <inbox-url-or-token> <file>...",
+		Aliases:           []string{"upload"},
+		Short:             i18n.T("cmd.share.put"),
+		Args:              cobra.MinimumNArgs(2),
+		ValidArgsFunction: completeArgs(completeNothing, completeLocalFiles),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			files, err := expandFiles(args[1:])
+			if err != nil {
+				return err
+			}
+			if name != "" && len(files) != 1 {
+				return errors.New(i18n.T("upload.name_multi"))
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			server, token, direct, err := parseShareRef(args[0], currentServer(cfg))
+			if err != nil {
+				return err
+			}
+			if direct != "" { // /s/<token>/<name>: a file of a download link
+				return errors.New(i18n.T("share.is_download"))
+			}
+			ctx, c := cmd.Context(), api.New(server, "")
+			sh, access, err := unlockShare(ctx, c, token, password, "upload")
+			if err != nil {
+				return err
+			}
+			info("share.inbox", sh.Share.Name, sh.Share.Creator)
+			if left := inboxLeft(sh); left != "" {
+				info("share.inbox_left", left)
+			}
+			done, failed := []*api.ShareUploaded{}, 0
+			for i, f := range files {
+				label := name
+				if label == "" {
+					label = filepath.Base(f.path)
+				}
+				bar := ui.NewBar(label, f.size, progressEnabled())
+				r, err := transfer.UploadToLink(ctx, c, token, access, f.path, transfer.UploadOptions{Name: name, Jobs: jobs, Progress: bar})
+				bar.Finish()
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if err != nil {
+					fmt.Fprintln(os.Stderr, i18n.T("error")+f.path+": "+errMessage(err))
+					failed++
+					// A used-up, expired or deleted link takes nothing more: skip the rest.
+					if api.IsCode(err, "share_exhausted") || api.IsCode(err, "share_expired") || api.IsCode(err, "not_found") {
+						failed += len(files) - i - 1
+						break
+					}
+					continue
+				}
+				done = append(done, r)
+				info("upload.ok", r.Name, ui.Size(r.Size), sh.Share.Name)
+			}
+			if jsonOut {
+				if err := printJSON(done); err != nil {
+					return err
+				}
+			}
+			if failed > 0 {
+				return errors.New(i18n.T("failed_count", failed, len(files)))
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&password, "password", "", i18n.T("flag.share_password"))
+	c.Flags().StringVar(&name, "name", "", i18n.T("flag.name"))
+	c.Flags().IntVarP(&jobs, "jobs", "j", 4, i18n.T("flag.jobs"))
+	return c
+}
+
+// inboxLeft describes what an upload link still takes ("" without limits).
+func inboxLeft(sh *api.PublicShare) string {
+	var left []string
+	if m := sh.Share.MaxUploads; m != nil {
+		left = append(left, i18n.T("share.files_left", max(0, *m-sh.Share.UploadCount)))
+	}
+	if m := sh.Share.MaxUploadBytes; m != nil {
+		left = append(left, ui.Size(max(0, *m-sh.Share.UploadBytes)))
+	}
+	return strings.Join(left, ", ")
+}
+
+// openShare fetches a download share with all its files (see unlockShare).
 func openShare(ctx context.Context, c *api.Client, token, password string) (*api.PublicShare, string, error) {
+	sh, access, err := unlockShare(ctx, c, token, password, "download")
+	if err != nil {
+		return nil, "", err
+	}
+	return sh, access, allShareFiles(ctx, c, token, access, sh)
+}
+
+// unlockShare fetches a public share of the given mode ("download" or "upload"), unlocking it
+// with the password (prompting on a terminal when none was given) if it is locked. It returns
+// the X-Share-Access token.
+func unlockShare(ctx context.Context, c *api.Client, token, password, mode string) (*api.PublicShare, string, error) {
 	sh, err := c.PublicShare(ctx, token, "", "")
 	if err != nil {
 		return nil, "", err
 	}
-	if sh.Share.Mode == "upload" {
-		return nil, "", errors.New(i18n.T("share.is_upload"))
+	if got := cmp.Or(sh.Share.Mode, "download"); got != mode { // servers before 0.3 send no mode
+		return nil, "", errors.New(i18n.T("share.is_" + got))
 	}
 	if !sh.Share.Locked {
-		return sh, "", allShareFiles(ctx, c, token, "", sh)
+		return sh, "", nil
 	}
 	if password == "" {
 		if !ui.IsTTY(os.Stdin) {
@@ -318,7 +422,7 @@ func openShare(ctx context.Context, c *api.Client, token, password string) (*api
 	if sh, err = c.PublicShare(ctx, token, access, ""); err != nil {
 		return nil, "", err
 	}
-	return sh, access, allShareFiles(ctx, c, token, access, sh)
+	return sh, access, nil
 }
 
 // allShareFiles appends the remaining pages of a project share's file list.

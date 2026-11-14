@@ -42,7 +42,8 @@ and bookkeeping.
 - **Administration.** Dashboard with usage, request and traffic charts; user management with
   per-user quotas; storage backends and SSO configured online.
 - **CLI.** Browser-based login (device flow) or API keys for unattended installs, project and member management, parallel
-  uploads/downloads, share links, password-protected share downloads without an account.
+  uploads/downloads, share links, password-protected share downloads and inbox uploads without an
+  account.
   Static binaries for Linux and macOS on amd64 and arm64.
 - **Garbage collection.** Stale uploads, deleted files and projects, expired sessions and
   shares are cleaned up on a schedule within Cloudflare's subrequest limits.

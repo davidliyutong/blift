@@ -10,6 +10,8 @@ All notable changes are documented here. The format follows
 
 - `make cf-config` writes `server/wrangler.local.toml` from the template and the environment
   (`CF_D1_ID`, `CF_DOMAIN`, `PUBLIC_URL`), so Cloudflare Workers Builds can deploy from GitHub.
+- `blift share put <inbox link> <file>...` uploads through an inbox link without signing in
+  (`--password` for a protected link, `--name`, `-j`); it stops once the link is used up.
 
 ### Changed
 

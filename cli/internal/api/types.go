@@ -122,6 +122,12 @@ type PublicShare struct {
 		CreatedAt     int64  `json:"created_at"`
 		FileCount     *int64 `json:"file_count,omitempty"`
 		TotalBytes    *int64 `json:"total_bytes,omitempty"`
+		// Upload links: the project's description and what the link still takes.
+		Description    string `json:"description,omitempty"`
+		MaxUploads     *int64 `json:"max_uploads,omitempty"`
+		UploadCount    int64  `json:"upload_count,omitempty"`
+		MaxUploadBytes *int64 `json:"max_upload_bytes,omitempty"`
+		UploadBytes    int64  `json:"upload_bytes,omitempty"`
 	} `json:"share"`
 	Blobs      []PublicBlob `json:"blobs,omitempty"`
 	NextCursor string       `json:"next_cursor,omitempty"`
@@ -159,6 +165,20 @@ type UploadInit struct {
 type Part struct {
 	PartNumber int    `json:"part_number"`
 	ETag       string `json:"etag"`
+}
+
+// ShareUploadInit starts an upload through an upload link (inbox); the later calls of that upload
+// send UploadToken.
+type ShareUploadInit struct {
+	UploadInit
+	UploadToken string `json:"upload_token"`
+}
+
+// ShareUploaded is a file received through an upload link; Name is its final name (a name that
+// is taken gets a number).
+type ShareUploaded struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 type CLILogin struct {
