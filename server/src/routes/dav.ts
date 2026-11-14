@@ -1,4 +1,4 @@
-// WebDAV (RFC 4918, class 1) for projects that have it turned on: /dav/<owner>/<project>/…,
+// WebDAV (RFC 4918) for projects that have it turned on: /dav/<owner>/<project>/…,
 // reached through the /dav alias (see app.ts). Clients sign in with HTTP Basic: the username and
 // a WebDAV password (services/dav.ts), never the account password.
 //
@@ -13,6 +13,9 @@
 // - OmniFocus: MOVE and COPY with Overwrite (412 when the destination exists and Overwrite is F,
 //   failure when its parent is missing), a Date header, and a collection whose getlastmodified
 //   changes when something in it does. A file's ETag is its blob id: every upload is a new blob.
+// - Finder, Windows and Office only write to a server that offers locks (class 2). LOCK and
+//   UNLOCK are answered but nothing is locked (see `lock`): the last writer wins, as with every
+//   other way of uploading here.
 import { Hono } from "hono";
 import { all, now, one, stmt, type DB } from "../db";
 import type { AppEnv, Ctx, UserRow } from "../env";
@@ -27,7 +30,9 @@ import { drainDeletedDirs, isUniqueError, makeDirs, moveBlobs, walkPath } from "
 import { hasQuotaFor } from "../services/users";
 import { abortUpload, finishUpload, startUpload } from "./uploads";
 
-const METHODS = "OPTIONS, PROPFIND, PROPPATCH, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY";
+const METHODS = "OPTIONS, PROPFIND, PROPPATCH, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK";
+/** What a lock claims to last; clients refresh before it runs out. */
+const LOCK_SECONDS = 3600;
 /** A request body up to this size is read into memory, so its length is known; larger ones are streamed. */
 const BUFFER_MAX = 16 * 1024 ** 2;
 /** Files a COPY of a directory may hold (each is an S3 request). */
@@ -139,6 +144,7 @@ const entryXml = (e: Entry) =>
   (e.dir ? "" : `<D:getcontentlength>${e.size ?? 0}</D:getcontentlength><D:getcontenttype>${esc(e.type ?? "application/octet-stream")}</D:getcontenttype>`) +
   (e.etag ? `<D:getetag>${esc(e.etag)}</D:getetag>` : "") +
   `<D:getlastmodified>${httpDate(e.modified)}</D:getlastmodified><D:creationdate>${new Date(e.created).toISOString()}</D:creationdate>` +
+  "<D:supportedlock><D:lockentry><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockentry></D:supportedlock><D:lockdiscovery/>" +
   `</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`;
 
 const blobEntry = (base: string[], dirPath: string[], b: BlobRow): Entry => ({
@@ -272,7 +278,8 @@ async function bodyOf(req: Request): Promise<{ body: BodyInit; size: number } | 
   return { body: buf, size };
 }
 
-async function put(c: Ctx, at: Place) {
+/** PUT; `empty` creates an empty file whatever the request body is (LOCK on a name that is free). */
+async function put(c: Ctx, at: Place, empty = false) {
   const db = c.env.DB;
   const here = at.segs.length > 2 ? await inProject(db, at) : null;
   if (!here) return fail(at.segs.length > 2 ? 404 : 403);
@@ -283,10 +290,10 @@ async function put(c: Ctx, at: Place) {
   const name = path[path.length - 1];
   const existing = await one<BlobRow>(db, "SELECT * FROM blobs WHERE project_id = ? AND parent_id = ? AND name = ? AND status = 'active'", project.id, parentId, name);
   if (existing?.kind === "dir") return fail(405, "a collection has this name");
-  if (!precondition(c, existing ? etagOf(existing) : undefined)) return reply(412);
-  const read = await bodyOf(c.req.raw);
+  if (!empty && !precondition(c, existing ? etagOf(existing) : undefined)) return reply(412);
+  const read = empty ? { body: new Uint8Array(), size: 0 } : await bodyOf(c.req.raw);
   if (read instanceof Response) return read;
-  const contentType = c.req.header("content-type")?.slice(0, 255) || "application/octet-stream";
+  const contentType = (!empty && c.req.header("content-type")?.slice(0, 255)) || "application/octet-stream";
   const init = await startUpload(c, project, { name, parentId, size: read.size, contentType, overwrite: true, uploaderId: at.user.id, viaInbox: false, single: true });
   const pending = (await one<BlobRow>(db, "SELECT * FROM blobs WHERE id = ?", init.blob_id))!;
   try {
@@ -304,6 +311,43 @@ async function put(c: Ctx, at: Place) {
   }
   await touch(db, project, parentId);
   return reply(existing ? 204 : 201, null, { etag: etagOf(pending) });
+}
+
+// ---- LOCK, UNLOCK
+
+/**
+ * Locks in name only. Finder, Windows and Office refuse to write unless the server takes their
+ * LOCK, so it is granted: a token comes back and UNLOCK is accepted, but nothing is recorded and
+ * no request is ever refused for a lock. Real locks would cost a database read on every write
+ * (the resource and each directory above it) and a write per lock, refresh and unlock; nothing
+ * else here keeps two people from replacing the same file either. As RFC 4918 asks, locking a
+ * name that is free creates an empty file.
+ */
+async function lock(c: Ctx, at: Place) {
+  const db = c.env.DB;
+  const here = at.segs.length >= 2 ? await inProject(db, at) : null;
+  if (!here) return fail(at.segs.length >= 2 ? 404 : 403);
+  if (!canWrite(at, here.project)) return fail(403);
+  const text = await c.req.text();
+  let status = 200;
+  if ((await resolve(db, here.project, here.path)) === undefined) {
+    const made = await put(c, at, true);
+    if (made.status !== 201) return made;
+    status = 201;
+  }
+  // A refresh names its token in If; a new lock gets a fresh one.
+  const token = c.req.header("if")?.match(/<(opaquelocktoken:[^>]+)>/)?.[1] ?? `opaquelocktoken:${crypto.randomUUID()}`;
+  const owner = text.match(/<(?:\w+:)?owner[^>]*>([\s\S]*?)<\/(?:\w+:)?owner>/)?.[1].replace(/<[^>]+>/g, "").trim();
+  const scope = /<(?:\w+:)?shared\s*\/>/.test(text) ? "shared" : "exclusive";
+  const root = davHref([...here.base, ...here.path], false);
+  const body =
+    `<?xml version="1.0" encoding="utf-8"?>\n<D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>` +
+    `<D:locktype><D:write/></D:locktype><D:lockscope><D:${scope}/></D:lockscope>` +
+    `<D:depth>${c.req.header("depth") === "0" ? "0" : "infinity"}</D:depth>` +
+    (owner ? `<D:owner>${esc(owner)}</D:owner>` : "") +
+    `<D:timeout>Second-${LOCK_SECONDS}</D:timeout><D:locktoken><D:href>${esc(token)}</D:href></D:locktoken>` +
+    `<D:lockroot><D:href>${esc(root)}</D:href></D:lockroot></D:activelock></D:lockdiscovery></D:prop>`;
+  return reply(status, body, { "content-type": 'application/xml; charset="utf-8"', "lock-token": `<${token}>` });
 }
 
 // ---- DELETE, MKCOL, MOVE, COPY
@@ -452,7 +496,7 @@ const dav = new Hono<AppEnv>();
 dav.all("*", async (c) => {
   const method = c.req.method.toUpperCase();
   // Clients ask what the server can do before they sign in.
-  if (method === "OPTIONS") return reply(200, null, { dav: "1", allow: METHODS, "ms-author-via": "DAV", "content-length": "0" });
+  if (method === "OPTIONS") return reply(200, null, { dav: "1, 2", allow: METHODS, "ms-author-via": "DAV", "content-length": "0" });
   const cred = await davCredential(c);
   if (!cred) {
     await discard(c.req.raw);
@@ -484,6 +528,10 @@ async function handle(c: Ctx, at: Place, method: string): Promise<Response> {
       case "MOVE":
       case "COPY":
         return await moveOrCopy(c, at, method === "MOVE");
+      case "LOCK":
+        return await lock(c, at);
+      case "UNLOCK":
+        return c.req.header("lock-token") ? reply(204) : fail(400, "Lock-Token is required");
       case "PROPPATCH":
         // Dead properties are not kept; the request is accepted so clients that set dates carry on.
         return multistatus([]);

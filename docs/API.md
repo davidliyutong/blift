@@ -471,7 +471,7 @@ password may do is what the user may do in the project (viewers read), less when
 `readonly` or limited to a project. Deleting one ends its access at once. Requests without valid
 credentials get `401` with `WWW-Authenticate: Basic`; `OPTIONS` needs none.
 
-**Protocol**: RFC 4918 class 1 (`DAV: 1`, no locking).
+**Protocol**: RFC 4918 (`DAV: 1, 2`). Locks are granted but **not enforced** (see `LOCK` below).
 
 | Method | Notes |
 | --- | --- |
@@ -483,7 +483,7 @@ credentials get `401` with `WWW-Authenticate: Basic`; `OPTIONS` needs none.
 | `MKCOL` | `201` (exactly); `405` when the name exists, `409` without the parent. |
 | `MOVE`, `COPY` | `Destination` in the same project, `Overwrite: T` (default) or `F`. `201` created, `204` replaced, `412` when the destination exists and `Overwrite` is `F`, `409` without the destination's parent. A move is one write whatever a directory holds; a copy is one storage request per file and takes at most 25 files (`507` beyond). The entity tags of an `If` header are checked. |
 | `PROPPATCH` | Accepted (`207`), nothing is stored. |
-| `LOCK`, `UNLOCK` | `405` |
+| `LOCK`, `UNLOCK` | Answered so that Finder, Windows and Office, which only write to a server with locks, can: `LOCK` returns `200` with a lock token (`201` and an empty file when the name was free; a refresh keeps its token), `UNLOCK` `204`. **Nothing is locked**: no request is ever refused for a lock, and when two clients write the same file the last one wins. `If-Match` still guards against replacing a version the client has not seen. |
 
 - A file's `ETag` is its blob id in quotes: every upload makes a new blob, so it is strong and
   changes exactly when the content does. Directories have none; their `getlastmodified` changes

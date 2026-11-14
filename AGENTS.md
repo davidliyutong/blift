@@ -111,7 +111,8 @@ The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). 
   after the response (`waitUntil`).
 - Errors: throw `ApiError(status, code, message)` (`lib/errors.ts`); `app.onError` renders it as
   `{error:{code,message}}`. The `code` is part of the contract; clients translate by it.
-- WebDAV (`routes/dav.ts`, `/dav/<owner>/<project>/…` through the `/dav` alias): class 1, Basic
+- WebDAV (`routes/dav.ts`, `/dav/<owner>/<project>/…` through the `/dav` alias): LOCK/UNLOCK are
+  answered but deliberately lock nothing (real locks would add a read to every write), Basic
   sign-in with a WebDAV password (`services/dav.ts`), built on the directory functions of
   `services/tree.ts`. A file's ETag is its blob id; every change inside a directory touches that
   directory's `updated_at`, because clients watch its `getlastmodified`. The smoke test replays

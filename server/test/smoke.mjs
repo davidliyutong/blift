@@ -629,7 +629,7 @@ const hrefs = (xml) => [...xml.matchAll(/<D:href>([^<]*)<\/D:href>/g)].map((m) =
 const prop = (xml, name) => xml.match(new RegExp(`<D:${name}>([^<]*)</D:${name}>`))?.[1];
 // Sign-in: OPTIONS needs none; anything else answers 401 with a Basic davChallenge.
 const davOpts = await dav("OPTIONS", "/admin/dav/", { auth: null });
-assert.deepEqual([davOpts.status, davOpts.headers.get("dav")], [200, "1"]);
+assert.deepEqual([davOpts.status, davOpts.headers.get("dav")], [200, "1, 2"]);
 const davChallenge = await dav("PROPFIND", "/admin/dav/", { auth: null, headers: { depth: "0" } });
 assert.equal(davChallenge.status, 401);
 assert.match(davChallenge.headers.get("www-authenticate"), /^Basic realm=/);
@@ -719,6 +719,26 @@ const gzBack = await dav("GET", `${O}/file`);
 assert.deepEqual([gzBack.headers.get("content-encoding"), Buffer.from(await gzBack.arrayBuffer()).equals(gz)], [null, true]);
 assert.equal((await dav("DELETE", `${O}/`)).status, 204);
 assert.equal((await dav("PROPFIND", `${O}/`, { headers: { depth: "0" } })).status, 404);
+// Locks in name only, for Finder, Windows and Office: LOCK answers with a token (and creates an
+// empty file for a free name), a refresh keeps the token, UNLOCK is accepted; nothing is refused.
+const lockBody = '<?xml version="1.0"?><D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype><D:owner><D:href>mac</D:href></D:owner></D:lockinfo>';
+const locked1 = await dav("LOCK", `${Z}/new.docx`, { body: lockBody, headers: { "content-type": "text/xml", timeout: "Second-600" } });
+const lockToken = locked1.headers.get("lock-token");
+const lockXml = await locked1.text();
+assert.equal(locked1.status, 201);
+assert.match(lockToken, /^<opaquelocktoken:[0-9a-f-]{36}>$/);
+assert.ok(lockXml.includes(`<D:href>${lockToken.slice(1, -1)}</D:href>`) && lockXml.includes("<D:owner>mac</D:owner>") && lockXml.includes("/dav/admin/dav/zotero/new.docx"));
+davUploads++; // the empty file
+assert.equal((await dav("HEAD", `${Z}/new.docx`)).headers.get("content-length"), "0");
+assert.equal((await dav("PUT", `${Z}/new.docx`, { body: Buffer.from("doc"), headers: { if: `(${lockToken})` } })).status, 204);
+const relock = await dav("LOCK", `${Z}/new.docx`, { headers: { if: `(${lockToken})` } });
+assert.deepEqual([relock.status, relock.headers.get("lock-token")], [200, lockToken]);
+assert.equal((await dav("PUT", `${Z}/new.docx`, { body: Buffer.from("other") })).status, 204); // no token: still not refused
+assert.equal((await dav("UNLOCK", `${Z}/new.docx`, { headers: { "lock-token": lockToken } })).status, 204);
+assert.equal((await dav("UNLOCK", `${Z}/new.docx`)).status, 400);
+assert.equal((await dav("LOCK", `${Z}/nope/x`, { body: lockBody })).status, 409);
+assert.ok((await (await dav("PROPFIND", `${Z}/new.docx`, { headers: { depth: "0" } })).text()).includes("<D:supportedlock>"));
+assert.equal((await dav("DELETE", `${Z}/new.docx`)).status, 204);
 // Passwords: one the user chose, limited to a project and to reading; deleting one ends it.
 assert.equal(await errCode(api("POST", "/api/auth/dav-passwords", { name: "short", password: "tooshort" }, { expect: 400 })), "bad_request");
 const ro = await api("POST", "/api/auth/dav-passwords", { name: "reader", password: "correct horse battery", project_id: wp.id, readonly: true }, { expect: 201 });
@@ -726,6 +746,7 @@ assert.deepEqual([ro.password, ro.generated, ro.project_id, ro.readonly], [undef
 const roAuth = basic("ADMIN", "correct horse battery"); // usernames are case-insensitive
 assert.equal((await dav("GET", `${Z}/ABCD2345.prop`, { auth: roAuth })).status, 200);
 assert.equal((await dav("PUT", `${Z}/x`, { auth: roAuth, body: Buffer.from("x") })).status, 403);
+assert.equal((await dav("LOCK", `${Z}/x`, { auth: roAuth, body: lockBody })).status, 403);
 assert.equal((await dav("DELETE", `${Z}/ABCD2345.prop`, { auth: roAuth })).status, 403);
 assert.equal((await dav("GET", `${Z}/ABCD2345.prop`, { auth: basic("admin", "correct horse battery!") })).status, 401);
 assert.deepEqual((await api("GET", "/api/auth/dav-passwords")).dav_passwords.map((d) => [d.name, d.project_name]), [["reader", "dav"], ["zotero", null]]);

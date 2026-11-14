@@ -16,7 +16,9 @@ All notable changes are documented here. The format follows
   `/dav/<owner>/<project>/` for Zotero, OmniFocus, file managers and other WebDAV clients. They
   sign in with the username and a WebDAV password from Account → WebDAV passwords (generated or
   your own, optionally limited to one project or to reading), never the account password.
-  Supports PROPFIND, GET with ranges, PUT, DELETE, MKCOL, MOVE and COPY (class 1, no locking).
+  Supports PROPFIND, GET with ranges, PUT, DELETE, MKCOL, MOVE and COPY. LOCK and UNLOCK are
+  accepted so that Finder, Windows and Office can write, but nothing is actually locked: when
+  two people save the same file, the last one wins.
   Files uploaded this way pass through the server: on Cloudflare Workers they are limited to
   100 MB each. Deployments on Workers need `/dav` and `/dav/*` in `run_worker_first` (see
   `server/wrangler.toml`; `make cf-config` writes it).
