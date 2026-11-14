@@ -52,10 +52,26 @@ export interface Project {
   updated_at: number;
 }
 
+export type BlobKind = "file" | "dir";
+
+/** What a directory listing says about the directory (`id: null`, `path: ""` = the root). */
+export interface DirInfo {
+  id: string | null;
+  path: string;
+  /** The directories above it, from the top down. */
+  parents: { id: string; name: string }[];
+}
+
+/** A file, or a directory (`kind: "dir"`, size 0). */
 export interface Blob {
   id: string;
   project_id: string;
+  kind: BlobKind;
+  /** The directory it is in; null = the project's root. */
+  parent_id: string | null;
   name: string;
+  /** Its path in the project ("docs/a.pdf"). */
+  path: string;
   size: number;
   content_type: string;
   uploader: UserRef | null;
@@ -82,8 +98,11 @@ export interface Share {
   mode: ShareMode;
   project_id: string;
   project_name: string;
+  /** The shared file or directory; null = the whole project. */
   blob_id: string | null;
   blob_name: string | null;
+  blob_kind: BlobKind | null;
+  blob_path: string | null;
   /** Direct link for wget/curl (/s/<token>/<name>); single-file shares only. */
   download_url: string | null;
   has_password: boolean;
@@ -175,16 +194,17 @@ interface PublicShareBase {
 export type PublicShare =
   | (PublicShareBase & {
       mode: "download";
-      kind: "blob" | "project";
+      kind: "blob" | "dir" | "project";
       max_downloads: number | null;
       download_count: number;
-      file_count?: number;
-      total_bytes?: number;
+      /** The whole share; null for a directory share. */
+      file_count?: number | null;
+      total_bytes?: number | null;
     })
   | (PublicShareBase & {
-      /** An upload link: never lists files. `name` is the project's. */
+      /** An upload link: never lists files. `name` is the project's or the directory's. */
       mode: "upload";
-      kind: "project";
+      kind: "project" | "dir";
       description: string;
       max_uploads: number | null;
       upload_count: number;
@@ -194,14 +214,19 @@ export type PublicShare =
 
 export interface PublicShareInfo {
   share: PublicShare;
+  /** The directory listed, relative to what is shared (`id: null` = the share's root). */
+  dir?: DirInfo;
   blobs?: PublicBlob[];
-  /** Set when a project share has more files than this page (pass it as `cursor`). */
+  /** Set when the directory has more entries than this page (pass it as `cursor`). */
   next_cursor?: string | null;
 }
 
 export interface PublicBlob {
   id: string;
+  kind: BlobKind;
   name: string;
+  /** Relative to what is shared. */
+  path: string;
   size: number;
   content_type: string;
   created_at: number;

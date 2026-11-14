@@ -52,10 +52,14 @@ type Storage struct {
 	IsDefault bool   `json:"is_default"`
 }
 
+// Blob is a file, or a directory (Kind "dir", size 0).
 type Blob struct {
 	ID            string   `json:"id"`
 	ProjectID     string   `json:"project_id"`
+	Kind          string   `json:"kind"`      // "file" | "dir"
+	ParentID      *string  `json:"parent_id"` // the directory it is in; nil = the project's root
 	Name          string   `json:"name"`
+	Path          string   `json:"path"` // its path in the project ("docs/a.pdf")
 	Size          int64    `json:"size"`
 	ContentType   string   `json:"content_type"`
 	Uploader      *UserRef `json:"uploader"`
@@ -79,8 +83,10 @@ type Share struct {
 	Mode          string  `json:"mode"` // "download" | "upload" (an inbox: anyone with the link can add files)
 	ProjectID     string  `json:"project_id"`
 	ProjectName   string  `json:"project_name"`
-	BlobID        *string `json:"blob_id"`
+	BlobID        *string `json:"blob_id"` // the shared file or directory; nil = the whole project
 	BlobName      *string `json:"blob_name"`
+	BlobKind      *string `json:"blob_kind"` // "file" | "dir"
+	BlobPath      *string `json:"blob_path"`
 	DownloadURL   *string `json:"download_url"` // direct link for wget/curl; single-file shares only
 	HasPassword   bool    `json:"has_password"`
 	ExpiresAt     *int64  `json:"expires_at"`
@@ -111,7 +117,7 @@ type PublicShare struct {
 	Share struct {
 		Token         string `json:"token"`
 		Mode          string `json:"mode"` // "download" | "upload"
-		Kind          string `json:"kind"` // "blob" | "project"
+		Kind          string `json:"kind"` // "blob" | "dir" | "project"
 		Name          string `json:"name"`
 		HasPassword   bool   `json:"has_password"`
 		Locked        bool   `json:"locked"`

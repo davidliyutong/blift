@@ -8,6 +8,17 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- **Directories** (server and API; the web UI and the CLI follow). A project is now a tree, up to
+  16 levels deep: `POST /api/projects/:id/dirs` (like `mkdir`, or `mkdir -p` with `parents`),
+  uploads take a `parent_id`, `GET …/blobs?path=` / `?parent_id=` lists one directory
+  (directories first) and `GET …/stat?path=` resolves a path. `PATCH /api/blobs/:id` moves as
+  well as renames, `POST …/blobs/move` moves up to 100 at once, and deleting a directory deletes
+  everything below it. Renaming or moving a directory is instant however much it holds. Every
+  `Blob` has `kind`, `parent_id` and `path`; without `path` / `parent_id` the listing still
+  returns all files of the project.
+- Share links for a directory: a download link is browsed a directory at a time and serves
+  `/s/<token>/<path>` to wget and curl; an inbox link can take files into a directory. Project
+  shares show directories too.
 - `make cf-config` writes `server/wrangler.local.toml` from the template and the environment
   (`CF_D1_ID`, `CF_DOMAIN`, `PUBLIC_URL`), so Cloudflare Workers Builds can deploy from GitHub.
 - `blift share put <inbox link> <file>...` uploads through an inbox link without signing in

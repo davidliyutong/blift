@@ -8,7 +8,7 @@ import { ApiError, notConfigured } from "./lib/errors";
 import { wantsPage } from "./lib/http";
 import admin from "./routes/admin";
 import auth from "./routes/auth";
-import { blobs, projectBlobs } from "./routes/blobs";
+import { blobs, projectBlobs, projectDirs, projectStat } from "./routes/blobs";
 import cli from "./routes/cli";
 import meta from "./routes/meta";
 import oidc from "./routes/oidc";
@@ -24,7 +24,7 @@ import { flushStats } from "./services/stats";
 const ALIASES: [RegExp, string][] = [
   [/^\/install\.sh$/, "/api/cli/install.sh"],
   // Share links: direct downloads for wget and curl. Browsers get the web page (isSharePage).
-  [/^\/s\/([^/]+)(\/[^/]+)?\/?$/, "/api/public/shares/$1/direct$2"],
+  [/^\/s\/([^/]+)((?:\/[^/]+)*)\/?$/, "/api/public/shares/$1/direct$2"],
 ];
 
 /** Rewrites a top-level alias such as /install.sh onto its /api route. */
@@ -41,7 +41,7 @@ export function resolveAlias(req: Request): Request {
 /**
  * A browser opening a share link (/s/<token>): it gets the web app, as for any other page, and
  * the entry points hand it over before the API runs, so page loads never touch the database.
- * wget and curl get the file instead (the alias above); /s/<token>/<name> is always a download.
+ * wget and curl get the file instead (the alias above); /s/<token>/<path> is always a download.
  */
 export function isSharePage(req: Request): boolean {
   return (req.method === "GET" || req.method === "HEAD") && /^\/s\/[^/]+\/?$/.test(new URL(req.url).pathname) && wantsPage(req);
@@ -71,6 +71,8 @@ export function createApp() {
   app.route("/cli", cli);
   app.route("/projects", projects);
   app.route("/projects/:pid/blobs", projectBlobs);
+  app.route("/projects/:pid/dirs", projectDirs);
+  app.route("/projects/:pid/stat", projectStat);
   app.route("/projects/:pid/uploads", projectUploads);
   app.route("/blobs", blobs);
   app.route("/uploads", uploads);

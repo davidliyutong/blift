@@ -346,6 +346,101 @@ assert.equal((await fetchBytes(viaList.headers.get("location"))).data.toString()
 assert.equal((await viaLink(`/s/${lshare.token}/nope.txt`)).status, 404);
 step(`listing: cursor pages, prefix, exact names, paged public share (${names.length} files), text list of direct links`);
 
+// Directories: mkdir, uploads into them, listings by path, move/rename, shares, recursive delete.
+const tp = await api("POST", "/api/projects", { name: "tree" }, { expect: 201 });
+const T = `/api/projects/${tp.id}`;
+const dirC = await api("POST", `${T}/dirs`, { path: "a/b/c", parents: true }, { expect: 201 });
+assert.deepEqual([dirC.kind, dirC.name, dirC.path, dirC.size], ["dir", "c", "a/b/c", 0]);
+assert.equal((await api("POST", `${T}/dirs`, { path: "/a/b/c/", parents: true }, { expect: 200 })).id, dirC.id);
+assert.equal(await errCode(api("POST", `${T}/dirs`, { path: "a/b/c" }, { expect: 409 })), "name_taken");
+assert.equal(await errCode(api("POST", `${T}/dirs`, { path: "nope/x" }, { expect: 404 })), "not_found");
+assert.equal(await errCode(api("POST", `${T}/dirs`, { path: "a/../b", parents: true }, { expect: 400 })), "bad_request");
+assert.equal(await errCode(api("POST", `${T}/dirs`, { path: Array(17).fill("d").join("/"), parents: true }, { expect: 400 })), "bad_request");
+const dirB = await api("GET", `${T}/stat?path=a/b`);
+assert.deepEqual([dirB.kind, dirB.id], ["dir", dirC.parent_id]);
+const dirX = await api("POST", `${T}/dirs`, { path: "x", parent_id: dirB.parent_id }, { expect: 201 });
+assert.equal(dirX.path, "a/x");
+// The same name lives in several directories; a file and a directory cannot share one.
+const deep = await upload(tp.id, "notes.txt", Buffer.from("deep"), { parent_id: dirC.id });
+assert.deepEqual([deep.kind, deep.parent_id, deep.path], ["file", dirC.id, "a/b/c/notes.txt"]);
+const top = await upload(tp.id, "notes.txt", Buffer.from("top!!"));
+assert.deepEqual([top.parent_id, top.path], [null, "notes.txt"]);
+await upload(tp.id, "z.txt", Buffer.from("zz"), { parent_id: dirB.id });
+assert.equal(await errCode(api("POST", `${T}/uploads`, { name: "a", size: 1, overwrite: true }, { expect: 409 })), "name_taken");
+assert.equal(await errCode(api("POST", `${T}/uploads`, { name: "f", size: 1, parent_id: deep.id }, { expect: 404 })), "not_found");
+assert.equal(await errCode(api("POST", `${T}/dirs`, { path: "notes.txt/sub", parents: true }, { expect: 409 })), "name_taken");
+assert.equal((await upload(tp.id, "notes.txt", Buffer.from("deeper"), { parent_id: dirC.id, overwrite: true })).path, "a/b/c/notes.txt");
+assert.equal((await fetchBytes((await api("GET", `/api/blobs/${(await api("GET", `${T}/stat?path=a/b/c/notes.txt`)).id}/download`)).url)).data.toString(), "deeper");
+assert.equal(await errCode(api("GET", `/api/blobs/${dirC.id}/download`, undefined, { expect: 400 })), "bad_request");
+// Listings: a directory (directories first) by path or id, and all files of the project.
+const inB = await api("GET", `${T}/blobs?path=a/b&sort=name&order=asc`);
+assert.deepEqual(inB.blobs.map((b) => [b.kind, b.path]), [["dir", "a/b/c"], ["file", "a/b/z.txt"]]);
+assert.deepEqual([inB.dir.id, inB.dir.path, inB.dir.parents.map((d) => d.name), inB.total], [dirB.id, "a/b", ["a"], undefined]);
+const inRoot = await api("GET", `${T}/blobs?path=/&sort=name&order=asc&limit=1`);
+assert.deepEqual([inRoot.dir, inRoot.blobs.map((b) => b.name)], [{ id: null, path: "", parents: [] }, ["a"]]);
+const inRoot2 = await api("GET", `${T}/blobs?path=&sort=name&order=asc&limit=1&cursor=${encodeURIComponent(inRoot.next_cursor)}`);
+assert.deepEqual([inRoot2.blobs.map((b) => b.name), inRoot2.next_cursor], [["notes.txt"], null]);
+assert.deepEqual((await api("GET", `${T}/blobs?parent_id=${dirC.id}`)).blobs.map((b) => b.name), ["notes.txt"]);
+assert.equal(await errCode(api("GET", `${T}/blobs?path=a/nope`, undefined, { expect: 404 })), "not_found");
+const allFiles = await api("GET", `${T}/blobs?sort=name&order=asc`);
+assert.deepEqual([allFiles.blobs.map((b) => b.path).sort(), allFiles.total, allFiles.dir], [["a/b/c/notes.txt", "a/b/z.txt", "notes.txt"], 3, undefined]);
+assert.equal((await api("GET", T)).blob_count, 3);
+// Move and rename: one row, whatever the directory holds.
+assert.equal((await api("PATCH", `/api/blobs/${dirC.id}`, { parent_id: dirX.id, name: "moved" })).path, "a/x/moved");
+assert.equal((await api("GET", `/api/blobs/${deep.id}`, undefined, { expect: 404 }))?.error.code, "not_found"); // replaced by the overwrite
+assert.equal((await api("GET", `${T}/stat?path=a/x/moved/notes.txt`)).size, 6);
+assert.equal(await errCode(api("GET", `${T}/stat?path=a/b/c/notes.txt`, undefined, { expect: 404 })), "not_found");
+assert.equal(await errCode(api("PATCH", `/api/blobs/${dirX.id}`, { parent_id: dirC.id }, { expect: 400 })), "bad_request"); // into itself
+assert.equal(await errCode(api("PATCH", `/api/blobs/${top.id}`, { name: "a" }, { expect: 409 })), "name_taken");
+assert.deepEqual(await api("POST", `${T}/blobs/move`, { ids: [top.id, dirX.id], parent_id: dirB.id }), { moved: 2 });
+assert.deepEqual((await api("GET", `${T}/blobs?path=a/b&sort=name&order=asc`)).blobs.map((b) => b.path), ["a/b/x", "a/b/notes.txt", "a/b/z.txt"]);
+assert.equal((await api("PATCH", `/api/blobs/${top.id}`, { parent_id: null })).path, "notes.txt");
+// Sharing a directory: browsed a directory at a time, never above it; paths are relative to it.
+const dshare = await api("POST", "/api/shares", { project_id: tp.id, blob_id: dirB.id }, { expect: 201 });
+assert.deepEqual([dshare.blob_kind, dshare.blob_name, dshare.blob_path, dshare.download_url], ["dir", "b", "a/b", null]);
+const dpub = await api("GET", `/api/public/shares/${dshare.token}`, undefined, { auth: null });
+assert.deepEqual([dpub.share.kind, dpub.share.name, dpub.share.file_count, dpub.dir], ["dir", "b", null, { id: null, path: "", parents: [] }]);
+assert.deepEqual(dpub.blobs.map((b) => [b.kind, b.path]), [["dir", "x"], ["file", "z.txt"]]);
+const dsub = await api("GET", `/api/public/shares/${dshare.token}?parent_id=${dirC.id}`, undefined, { auth: null });
+assert.deepEqual([dsub.dir.path, dsub.dir.parents.map((d) => d.name), dsub.blobs.map((b) => b.path)], ["x/moved", ["x"], ["x/moved/notes.txt"]]);
+const dirA = await api("GET", `${T}/stat?path=a`);
+assert.equal(await errCode(api("GET", `/api/public/shares/${dshare.token}?parent_id=${dirA.id}`, undefined, { auth: null, expect: 404 })), "not_found");
+const inShare = dsub.blobs[0];
+const viaDir = await api("GET", `/api/public/shares/${dshare.token}/blobs/${inShare.id}/download`, undefined, { auth: null });
+assert.equal((await fetchBytes(viaDir.url)).data.toString(), "deeper");
+assert.equal(await errCode(api("GET", `/api/public/shares/${dshare.token}/blobs/${top.id}/download`, undefined, { auth: null, expect: 404 })), "not_found");
+assert.equal(await errCode(api("GET", `/api/public/shares/${dshare.token}/blobs/${dirC.id}/download`, undefined, { auth: null, expect: 404 })), "not_found");
+const dlinks = (await (await viaLink(`/s/${dshare.token}`)).text()).trim().split("\n");
+assert.deepEqual(dlinks, [`${BASE}/s/${dshare.token}/z.txt`, `${BASE}/s/${dshare.token}/x/moved/notes.txt`]);
+const dvia = await viaLink(new URL(dlinks[1]).pathname);
+assert.equal(dvia.status, 302);
+assert.equal((await fetchBytes(dvia.headers.get("location"))).data.toString(), "deeper");
+assert.equal((await viaLink(`/s/${dshare.token}/x/moved`)).status, 404);
+assert.equal((await viaLink(`/s/${dshare.token}/notes.txt`)).status, 404);
+// A project share covers every level too.
+const pshare = await api("POST", "/api/shares", { project_id: tp.id }, { expect: 201 });
+assert.equal((await viaLink(`/s/${pshare.token}/a/b/z.txt`)).status, 302);
+assert.deepEqual((await api("GET", `/api/public/shares/${pshare.token}`, undefined, { auth: null })).blobs.map((b) => b.path), ["a", "notes.txt"]);
+// An upload link into a directory.
+assert.equal(await errCode(api("POST", "/api/shares", { project_id: tp.id, mode: "upload", blob_id: top.id }, { expect: 400 })), "bad_request");
+const dup = await api("POST", "/api/shares", { project_id: tp.id, mode: "upload", blob_id: dirX.id }, { expect: 201 });
+assert.deepEqual([(await api("GET", `/api/public/shares/${dup.token}`, undefined, { auth: null })).share.kind, dup.blob_path], ["dir", "a/b/x"]);
+assert.deepEqual(await shareUpload(dup.token, null, "moved", Buffer.from("drop")), { name: "moved (1)", size: 4 }); // a directory has the name
+assert.equal((await api("GET", `${T}/stat?path=${encodeURIComponent("a/b/x/moved (1)")}`)).via_inbox, true);
+// Deleting a directory takes everything below it, its share links and its usage.
+const before = await api("GET", T);
+assert.deepEqual([before.blob_count, before.used_bytes], [4, 6 + 5 + 2 + 4]);
+assert.deepEqual(await api("POST", `${T}/blobs/delete`, { ids: [dirX.id] }), { deleted: 1 });
+assert.equal(await errCode(api("GET", `${T}/stat?path=a/b/x/moved/notes.txt`, undefined, { expect: 404 })), "not_found");
+assert.equal(await errCode(api("GET", `/api/public/shares/${dup.token}`, undefined, { auth: null, expect: 404 })), "not_found");
+const after = await api("GET", T);
+assert.deepEqual([after.blob_count, after.used_bytes], [2, 5 + 2]);
+await api("DELETE", `/api/blobs/${dirA.id}`, undefined, { expect: 204 });
+assert.equal(await errCode(api("GET", `/api/public/shares/${dshare.token}`, undefined, { auth: null, expect: 404 })), "not_found");
+assert.deepEqual((await api("GET", `${T}/blobs?path=`)).blobs.map((b) => b.name), ["notes.txt"]);
+assert.equal((await api("GET", T)).used_bytes, 5);
+step("directories: mkdir -p, uploads, listings by path, move/rename, directory shares and upload links, recursive delete");
+
 const share2 = await api("POST", "/api/shares", { project_id: project.id, password: "s3cret", max_downloads: 1, expires_in: 3600 }, { expect: 201 });
 assert.equal(share2.has_password, true);
 const locked = await api("GET", `/api/public/shares/${share2.token}`, undefined, { auth: null });
@@ -409,7 +504,7 @@ const tok = await api("POST", "/api/cli/login/poll", { device_code: dev.device_c
 assert.match(tok.token, /^blift_/);
 assert.equal(await errCode(api("POST", "/api/cli/login/poll", { device_code: dev.device_code }, { auth: null, expect: 400 })), "expired_token");
 const viaToken = await api("GET", "/api/projects", undefined, { auth: tok.token });
-assert.deepEqual(viaToken.projects.map((p) => p.name).sort(), ["demo", "elsewhere", "listing"]);
+assert.deepEqual(viaToken.projects.map((p) => p.name).sort(), ["demo", "elsewhere", "listing", "tree"]);
 step("CLI device login (pending → approved → token, single use)");
 
 // API keys: unattended CLI logins. Single use, unlimited, linked sessions, revocation.
@@ -457,7 +552,7 @@ await api("POST", `/api/projects/${ib.id}/members`, { user: "alice-2", role: "vi
 const asBob = (method, path, body, expect) => api(method, path, body, { auth: null, headers: { cookie: l2.session }, expect });
 assert.equal(await errCode(asBob("POST", "/api/shares", { project_id: ib.id, mode: "upload" }, 403)), "forbidden"); // editors and up
 assert.equal(await errCode(api("POST", "/api/shares", { project_id: ib.id, mode: "both" }, { expect: 400 })), "bad_request");
-assert.equal(await errCode(api("POST", "/api/shares", { project_id: ib.id, mode: "upload", blob_id: "x" }, { expect: 400 })), "bad_request");
+assert.equal(await errCode(api("POST", "/api/shares", { project_id: ib.id, mode: "upload", blob_id: "x" }, { expect: 404 })), "not_found");
 const up = await api("POST", "/api/shares", { project_id: ib.id, mode: "upload", password: "letmein", max_downloads: 5 }, { expect: 201 });
 assert.deepEqual([up.mode, up.blob_id, up.download_url, up.max_downloads, up.max_uploads, up.upload_count], ["upload", null, null, null, null, 0]);
 const ibToken = up.token;
@@ -549,6 +644,8 @@ step("an API-key sign-in without expiry survives GC until revoked");
 await api("DELETE", `/api/projects/${lp.id}`, undefined, { expect: 204 }); // releases its usage at once
 await api("DELETE", `/api/projects/${ib.id}`, undefined, { expect: 204 });
 await api("DELETE", `/api/projects/${elsewhere.id}`, undefined, { expect: 204 });
+await api("DELETE", `/api/projects/${tp.id}`, undefined, { expect: 204 });
+const treeBytes = 4 + 5 + 2 + 6 + 4; // the five uploads of the directories section
 const inboxBytes = 3 * report.length + big.length; // report.pdf, report (1).pdf, big.bin, one.txt
 const stats = await api("GET", "/api/admin/stats?days=7");
 assert.equal(stats.series.length, 7);
@@ -556,8 +653,8 @@ const today = stats.series.at(-1);
 const listingBytes = names.reduce((n, x) => n + Buffer.byteLength(x), 0);
 assert.ok(
   today.requests > 20 &&
-    today.uploads === 3 + names.length + 4 &&
-    today.upload_bytes === small.length + big.length + small2.length + listingBytes + inboxBytes,
+    today.uploads === 3 + names.length + 4 + 5 &&
+    today.upload_bytes === small.length + big.length + small2.length + listingBytes + inboxBytes + treeBytes,
   JSON.stringify(today),
 );
 const users = await api("GET", "/api/admin/users");

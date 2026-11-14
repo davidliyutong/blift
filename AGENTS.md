@@ -93,6 +93,15 @@ The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). 
     (GC deletes the object, then the row).
   - project: `active` → `deleting` (all blobs flagged deleted, quota released immediately) → GC
     deletes the row once its blobs are gone.
+- Directories (`services/tree.ts`): a directory is a `blobs` row with `kind = 'dir'` (no object in
+  storage), and every row names its directory in `parent_id` (`''` = the project's root). Paths
+  are **never stored**: they are resolved with one recursive query over at most 16 rows
+  (`walkPath`, `chainsOf`), so moving or renaming a directory writes one row. Names are unique
+  per directory by the index `blobs_project_name`, files and directories alike. Deleting a
+  directory only flags its row, which makes everything below unreachable by path;
+  `drainDeletedDirs` then releases the contents level by level, a bounded amount in the request
+  and the rest in GC. Queries that mean files must say `kind = 'file'`; S3 work must never see a
+  directory row (`storage_id = ''`).
 - Quota/usage: `projects.used_bytes/blob_count` and `users.used_bytes` are maintained
   incrementally; GC `reconcile`s them against the real data once a day. Usage counts against the
   **project owner**.
@@ -158,7 +167,8 @@ The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). 
 
 ## Product boundaries (don't build these)
 
-- No folders or trees: only project → blob. Blob names cannot contain `/`.
+- Projects do not nest: project → directories (≤ 16 levels) → files. Names cannot contain `/`;
+  paths exist only at the edges (API parameters, CLI arguments), never in the database.
 - No billing, elaborate auditing, rate limiting or other "enterprise" features; this is an
   internal tool, keep it light and avoid overly defensive programming.
 - No file traffic through the server (including conveniences such as "proxied downloads").
