@@ -126,6 +126,14 @@ variables `CF_D1_ID` (the D1 database id) plus, optionally, `CF_DOMAIN` (custom 
 `PUBLIC_URL`. `make cf-config` writes `server/wrangler.local.toml` from the template on every
 build, so template changes are picked up without manual edits.
 
+Builds of other branches (pull requests) can deploy a
+[Worker Preview](https://developers.cloudflare.com/workers/previews/): set the non-production
+deploy command to `make preview` and the build variable `CF_PREVIEW_D1_ID` to a **separate** D1
+database (`wrangler d1 create blift-preview`). A preview applies its branch's migrations, so it
+must never share the production database; it also needs its own `APP_SECRET`
+(`wrangler preview secret`) and has no cron trigger, so no GC runs. Without previews, turn
+non-production branch builds off in the Worker's Builds settings.
+
 ### Local development
 
 ```sh

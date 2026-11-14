@@ -12,7 +12,7 @@ WRANGLER_CONFIG = $(if $(wildcard server/wrangler.local.toml),wrangler.local.tom
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev dev-server dev-web dev-worker build build-web build-server cli cli-all cli-dist \
-        test test-server test-cli typecheck smoke docker docker-up cf-init cf-config cf-secrets deploy clean
+        test test-server test-cli typecheck smoke docker docker-up cf-init cf-config cf-secrets preview deploy clean
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*## "} /^[a-zA-Z_-]+:.*## /{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -98,6 +98,9 @@ cf-secrets: ## Generate APP_SECRET and BOOTSTRAP_SECRET and store them as Worker
 	@openssl rand -base64 48 | tr -d '\n' | $(WRANGLER) secret put APP_SECRET --config $(WRANGLER_CONFIG)
 	@b=$$(openssl rand -hex 16); printf %s "$$b" | $(WRANGLER) secret put BOOTSTRAP_SECRET --config $(WRANGLER_CONFIG); \
 	  echo; echo "  Bootstrap secret (open /setup once deployed): $$b"; echo
+
+preview: build-web ## Deploy a Worker Preview of this branch (wrangler preview; needs CF_PREVIEW_D1_ID in cf-config)
+	cd server && pnpm exec wrangler preview --config $(WRANGLER_CONFIG)
 
 deploy: build-web ## Deploy to Cloudflare Workers (API + static assets + cron GC)
 	cd server && pnpm exec wrangler deploy --config $(WRANGLER_CONFIG)

@@ -104,6 +104,12 @@ make deploy         # 构建前端并部署 API + 静态资源 + GC 定时任务
 以及可选的 `CF_DOMAIN`（自定义域名）和 `PUBLIC_URL`。`make cf-config` 每次构建都从模板生成
 `server/wrangler.local.toml`，模板的变化会自动生效，无需手动修改。
 
+其他分支（如 PR）的构建可以部署一个 [Worker Preview](https://developers.cloudflare.com/workers/previews/)：
+把非生产分支的部署命令设为 `make preview`，并把构建变量 `CF_PREVIEW_D1_ID` 设为一个**单独的** D1 数据库
+（`wrangler d1 create blift-preview`）。预览会执行所在分支的数据库迁移，所以绝不能与生产库共用；它还需要自己的
+`APP_SECRET`（`wrangler preview secret`），并且没有定时触发器，不会运行 GC。不需要预览时，在 Worker 的 Builds
+设置里关闭非生产分支构建即可。
+
 ### 本地开发
 
 ```sh

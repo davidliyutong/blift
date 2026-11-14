@@ -12,6 +12,8 @@ All notable changes are documented here. The format follows
   folders, upload a folder (picker or drag and drop; its structure is kept), move files and
   folders, share a folder as a download link or an inbox, and browse shared folders on the share
   page. Search still covers the whole project and shows where each file is.
+- `make preview` deploys a Worker Preview of the current branch, and `make cf-config` writes the
+  `previews` block it needs when `CF_PREVIEW_D1_ID` (a database of its own) is set.
 - **WebDAV.** A project's owner can turn WebDAV on in its settings; the project is then at
   `/dav/<owner>/<project>/` for Zotero, OmniFocus, file managers and other WebDAV clients. They
   sign in with the username and a WebDAV password from Account → WebDAV passwords (generated or
