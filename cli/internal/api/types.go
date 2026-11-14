@@ -34,11 +34,8 @@ type Project struct {
 	StorageLocation string  `json:"storage_location"` // the backend's location label, "" when not set
 	UsedBytes       int64   `json:"used_bytes"`
 	BlobCount       int64   `json:"blob_count"`
-	// InboxEnabled: the project accepts anonymous uploads; InboxURL is only sent to editors and owners.
-	InboxEnabled bool    `json:"inbox_enabled"`
-	InboxURL     *string `json:"inbox_url"`
-	CreatedAt    int64   `json:"created_at"`
-	UpdatedAt    int64   `json:"updated_at"`
+	CreatedAt       int64   `json:"created_at"`
+	UpdatedAt       int64   `json:"updated_at"`
 }
 
 type Member struct {
@@ -62,7 +59,7 @@ type Blob struct {
 	Size          int64    `json:"size"`
 	ContentType   string   `json:"content_type"`
 	Uploader      *UserRef `json:"uploader"`
-	ViaInbox      bool     `json:"via_inbox"` // uploaded anonymously through the project inbox
+	ViaInbox      bool     `json:"via_inbox"` // uploaded anonymously through an upload link
 	DownloadCount int64    `json:"download_count"`
 	CreatedAt     int64    `json:"created_at"`
 	UpdatedAt     int64    `json:"updated_at"`
@@ -79,6 +76,7 @@ type Share struct {
 	ID            string  `json:"id"`
 	Token         string  `json:"token"`
 	URL           string  `json:"url"`
+	Mode          string  `json:"mode"` // "download" | "upload" (an inbox: anyone with the link can add files)
 	ProjectID     string  `json:"project_id"`
 	ProjectName   string  `json:"project_name"`
 	BlobID        *string `json:"blob_id"`
@@ -88,22 +86,31 @@ type Share struct {
 	ExpiresAt     *int64  `json:"expires_at"`
 	MaxDownloads  *int64  `json:"max_downloads"`
 	DownloadCount int64   `json:"download_count"`
-	ViewCount     int64   `json:"view_count"`
-	Creator       UserRef `json:"creator"`
-	CreatedAt     int64   `json:"created_at"`
+	// Upload links: limits on files and their total size (nil = none), and what came in so far.
+	MaxUploads     *int64  `json:"max_uploads"`
+	MaxUploadBytes *int64  `json:"max_upload_bytes"`
+	UploadCount    int64   `json:"upload_count"`
+	UploadBytes    int64   `json:"upload_bytes"`
+	ViewCount      int64   `json:"view_count"`
+	Creator        UserRef `json:"creator"`
+	CreatedAt      int64   `json:"created_at"`
 }
 
 type CreateShare struct {
-	ProjectID    string `json:"project_id"`
-	BlobID       string `json:"blob_id,omitempty"`
-	Password     string `json:"password,omitempty"`
-	ExpiresIn    int64  `json:"expires_in,omitempty"` // seconds; 0 = never
-	MaxDownloads int64  `json:"max_downloads,omitempty"`
+	ProjectID      string `json:"project_id"`
+	Mode           string `json:"mode,omitempty"` // "" = download
+	BlobID         string `json:"blob_id,omitempty"`
+	Password       string `json:"password,omitempty"`
+	ExpiresIn      int64  `json:"expires_in,omitempty"` // seconds; 0 = never
+	MaxDownloads   int64  `json:"max_downloads,omitempty"`
+	MaxUploads     int64  `json:"max_uploads,omitempty"`
+	MaxUploadBytes int64  `json:"max_upload_bytes,omitempty"`
 }
 
 type PublicShare struct {
 	Share struct {
 		Token         string `json:"token"`
+		Mode          string `json:"mode"` // "download" | "upload"
 		Kind          string `json:"kind"` // "blob" | "project"
 		Name          string `json:"name"`
 		HasPassword   bool   `json:"has_password"`

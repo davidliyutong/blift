@@ -73,6 +73,21 @@ func TestParseExpires(t *testing.T) {
 	}
 }
 
+func TestParseSize(t *testing.T) {
+	for in, want := range map[string]int64{
+		"4096": 4096, "500M": 500 << 20, "10G": 10 << 30, "10GB": 10 << 30, "1.5GiB": 3 << 29, "2t": 2 << 40, "1 K": 1024,
+	} {
+		if got, err := parseSize(in); err != nil || got != want {
+			t.Errorf("parseSize(%q) = %v, %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"", "G", "0", "-1G", "10X", "1.2.3M"} {
+		if _, err := parseSize(in); err == nil {
+			t.Errorf("parseSize(%q) should fail", in)
+		}
+	}
+}
+
 func TestParseShareRef(t *testing.T) {
 	cases := []struct{ ref, server, token, name string }{
 		{"https://files.example.com/s/AbC123", "https://files.example.com", "AbC123", ""},

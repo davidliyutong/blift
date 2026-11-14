@@ -37,7 +37,8 @@ and the CLI (`cli/`). Change it together with the code.
 | `name_taken` | 409 | a project/blob with that name already exists |
 | `setup_done` | 409 | bootstrap already completed |
 | `share_expired` | 410 | share expired |
-| `share_exhausted` | 410 | share reached its download limit |
+| `share_exhausted` | 410 | share reached its download limit, or an upload link its file or size limit |
+| `upload_too_large` | 413 | the file is larger than what an upload link can still take |
 | `authorization_pending` | 400 | CLI login not approved yet (poll again) |
 | `access_denied` | 400 | CLI login denied |
 | `expired_token` | 400 | CLI login request expired |
@@ -70,8 +71,6 @@ type Project = {
   storage_id: string; storage_name: string;
   storage_location: string;              // the backend's location label ("" when not set)
   used_bytes: number; blob_count: number;
-  inbox_enabled: boolean;                // accepts anonymous uploads (see "Inbox")
-  inbox_url: string | null;              // <public origin>/i/<token>; only for editors and owners
   created_at: number; updated_at: number;
 };
 
@@ -79,20 +78,24 @@ type Blob = {
   id: string; project_id: string; name: string; size: number;
   content_type: string;                  // "application/octet-stream" if unknown
   uploader: UserRef | null;
-  via_inbox: boolean;                    // uploaded anonymously through the project inbox
+  via_inbox: boolean;                    // uploaded anonymously through an upload link
   download_count: number;
   created_at: number; updated_at: number;
 };
 
 type Share = {
   id: string; token: string; url: string;        // url = <public origin>/s/<token>
+  mode: "download" | "upload";   // upload = an inbox: anyone with the link can add files (see "Upload links")
   project_id: string; project_name: string;
-  blob_id: string | null; blob_name: string | null;  // null = whole project
+  blob_id: string | null; blob_name: string | null;  // null = whole project (always for upload links)
   download_url: string | null;   // <public origin>/s/<token>/<file name, URL-encoded>; single-file shares
                                  // only: a direct link for wget/curl (see "Share links for wget and curl")
   has_password: boolean;
-  expires_at: number | null; max_downloads: number | null;
-  download_count: number; view_count: number;
+  expires_at: number | null;
+  max_downloads: number | null; download_count: number;   // download links (null / 0 on upload links)
+  max_uploads: number | null; max_upload_bytes: number | null;  // upload links: limits on files and on
+  upload_count: number; upload_bytes: number;              // their total size; files received so far
+  view_count: number;
   creator: UserRef; created_at: number;
 };
 ```
@@ -229,8 +232,7 @@ set), shown when users pick the backend of a new project (`storage_id` in `POST 
 | GET | `/api/projects` | – | `{projects: Project[]}` (all projects the caller is a member of) |
 | POST | `/api/projects` | `{name, description?, storage_id?}` | `Project` (201) |
 | GET | `/api/projects/:id` | – | `Project` |
-| PATCH | `/api/projects/:id` | `{name?, description?, inbox_enabled?}` | `Project` (owner) |
-| POST | `/api/projects/:id/inbox/reset` | – | `Project` (owner; new inbox link, 409 `conflict` while disabled) |
+| PATCH | `/api/projects/:id` | `{name?, description?}` | `Project` (owner) |
 | DELETE | `/api/projects/:id` | – | 204 (owner or admin; objects are removed asynchronously by GC) |
 | GET | `/api/projects/:id/members` | – | `{members: [{user: UserRef & {email}, role, created_at}]}` |
 | POST | `/api/projects/:id/members` | `{user: "<username or email>", role: "editor"\|"viewer"}` | member (owner) |
@@ -296,10 +298,13 @@ Presigned URLs are valid for 6 hours.
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
 | GET | `/api/shares?project_id=` | – | `{shares: Share[]}` (shares created by me, or in projects I own) |
-| POST | `/api/shares` | `{project_id, blob_id?, password?, expires_in?, max_downloads?}` | `Share` (201, editor) |
+| POST | `/api/shares` | `{project_id, mode?, blob_id?, password?, expires_in?, max_downloads?, max_uploads?, max_upload_bytes?}` | `Share` (201, editor) |
 | DELETE | `/api/shares/:id` | – | 204 (creator, project owner or admin) |
 
-`expires_in` is seconds from now (omit/null = never). `blob_id` omitted = share the whole project.
+`mode` is `"download"` (default) or `"upload"`. `expires_in` is seconds from now (omit/null =
+never). `blob_id` omitted = share the whole project; upload links always cover the whole project
+(`blob_id` is refused). `max_downloads` applies to download links, `max_uploads` (files) and
+`max_upload_bytes` (total size) to upload links; omit/null = no limit.
 
 ## Public share access (no login)
 
@@ -310,14 +315,17 @@ Presigned URLs are valid for 6 hours.
 | GET | `/api/public/shares/:token/blobs/:blob_id/download?redirect=1` | `{url, expires_at}` or 302 |
 
 ```json
-{ "share": { "token": "…", "kind": "blob" | "project", "name": "file or project name",
+{ "share": { "token": "…", "mode": "download", "kind": "blob" | "project", "name": "file or project name",
              "has_password": true, "locked": false, "expires_at": null,
              "max_downloads": null, "download_count": 3, "creator": "Alice", "created_at": 0,
              "file_count": 12000, "total_bytes": 123456789 },
   "blobs": [ { "id", "name", "size", "content_type", "created_at" } ],
   "next_cursor": "…" }
 ```
-`blobs` and `next_cursor` are omitted while `locked`. A project share lists its files by name,
+An upload link (`"mode": "upload"`, `"kind": "project"`) describes the project and its limits
+instead and never lists files: `{share: {token, mode, kind, name, description, has_password,
+locked, expires_at, max_uploads, upload_count, max_upload_bytes, upload_bytes, creator,
+created_at}}`. `blobs` and `next_cursor` are omitted while `locked`. A project share lists its files by name,
 `limit` (1–5000, default 5000) at a time; `next_cursor` (else `null`) fetches the next page
 as `?cursor=`. `file_count` / `total_bytes` describe the whole share. For password-protected shares pass the access token with
 header `X-Share-Access: <token>` or query `?access_token=` (the unlock call also sets an
@@ -344,6 +352,8 @@ the API too: they are aliases of `GET /api/public/shares/:token/direct` and
     `wget -i`. Requests with `?access_token=` get it appended to every link.
   - `HEAD` answers `200` with the file's `Content-Length`, `Content-Type` and
     `Content-Disposition`, without counting a download or issuing a URL.
+- Upload links have nothing to download: `404` (`not_found`) with a hint to open the link in a
+  browser.
 - `/s/<token>/<name>` downloads in browsers too; browsers (and link previews) that hit an error
   there are redirected to the share page `/s/<token>`, which shows it (or asks for the password).
 - Password-protected shares need an access token from `…/unlock`, as header
@@ -351,27 +361,30 @@ the API too: they are aliases of `GET /api/public/shares/:token/direct` and
 - Errors are `text/plain` (`<message> (<code>)`) with the API's status and code: `not_found` (404),
   `share_expired` / `share_exhausted` (410), `invalid_password` (403).
 
-## Inbox (anonymous uploads, no login)
+## Upload links (anonymous uploads, no login)
 
-An owner can let anyone with a link upload into a project: `PATCH /api/projects/:id`
-`{inbox_enabled: true}` (default off). The link is `Project.inbox_url` = `<public origin>/i/<token>`
-(the web page); `false` disables it, and enabling again or `POST …/inbox/reset` issues a new token.
-Uploaders cannot list, download or replace anything. A name that is taken becomes
-`name (1).ext`, `name (2).ext`, … when the upload completes. Usage, quota and traffic stats are
-charged to the project owner. Files show up with `uploader: null, via_inbox: true`.
+A share with `mode: "upload"` is an inbox: anyone with the link (and its password, if set) can
+upload into the project, until the link expires or reaches `max_uploads` files or
+`max_upload_bytes` bytes. The link is `Share.url` like any share; browsers get an upload page.
+Uploaders cannot list, download or replace anything. A name that is taken becomes `name (1).ext`,
+`name (2).ext`, … when the upload completes. Usage, quota and traffic stats are charged to the
+project owner. Files show up with `uploader: null, via_inbox: true`.
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `/api/public/inbox/:token` | – | `{inbox: {name, description, owner}}` (`owner` = display name) |
-| POST | `/api/public/inbox/:token/uploads` | `{name, size, content_type?}` | upload init + `upload_token` (201) |
-| POST | `/api/public/inbox/:token/uploads/:blob_id/parts` | `{part_numbers}` | `{urls, expires_at}` |
-| POST | `/api/public/inbox/:token/uploads/:blob_id/complete` | `{parts?}` | `{name, size}` (`name` = final name) |
-| DELETE | `/api/public/inbox/:token/uploads/:blob_id` | – | 204 |
+| POST | `/api/public/shares/:token/uploads` | `{name, size, content_type?}` | upload init + `upload_token` (201) |
+| POST | `/api/public/shares/:token/uploads/:blob_id/parts` | `{part_numbers}` | `{urls, expires_at}` |
+| POST | `/api/public/shares/:token/uploads/:blob_id/complete` | `{parts?}` | `{name, size}` (`name` = final name) |
+| DELETE | `/api/public/shares/:token/uploads/:blob_id` | – | 204 |
 
-The upload flow is the one in **Uploads** (same modes, part sizes and presigned S3 URLs). The
-calls after init must send the `upload_token` from the init response as header
-`X-Upload-Token: <token>` (valid 6 h, for that upload only). Errors: `not_found` (unknown or
-disabled inbox, or a wrong upload token), `quota_exceeded` (owner's quota).
+The upload flow is the one in **Uploads** (same modes, part sizes and presigned S3 URLs). Init
+needs the share's access token when it has a password (as for downloads: header `X-Share-Access`,
+`?access_token=` or the unlock cookie). The calls after init must send the `upload_token` from the
+init response as header `X-Upload-Token: <token>` (valid 6 h, for that upload only); an upload
+that has started may finish after the link expires. A file counts towards the limits when it
+completes. Errors: `not_found` (unknown link, not an upload link, or a wrong upload token),
+`invalid_password` (403, locked), `share_expired`, `share_exhausted` (a limit is used up),
+`upload_too_large` (the file is larger than the size left), `quota_exceeded` (owner's quota).
 
 ## Admin (role = admin)
 

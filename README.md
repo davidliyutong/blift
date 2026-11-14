@@ -31,8 +31,10 @@ and bookkeeping.
 - **Sharing.** Public links for a single file or a whole project, with optional password,
   expiry and download limit; recipients need no account, and `wget` / `curl` download straight
   from the link.
-- **Inbox.** A project can take anonymous uploads through a link (off by default): senders need no
-  account and see nothing in the project; a name that is taken gets a number instead of replacing.
+- **Inbox.** Upload links (choose "Inbox" when creating a share link) let anyone add files to a
+  project, with a password, expiry and limits on the number of files and their total size; senders
+  need no account and see nothing in the project, and a name that is taken gets a number instead
+  of replacing.
 - **Single sign-on.** OIDC with PKCE, tuned for Authentik; HS256, RS256 and ES256 ID tokens;
   users are created on first sign-in and an IdP group can grant the admin role.
 - **Security.** TOTP two-factor authentication, one-off bootstrap secret for the first admin,

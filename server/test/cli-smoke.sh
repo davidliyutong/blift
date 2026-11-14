@@ -84,6 +84,13 @@ cmp "$WORK/up/big.bin" "$WORK/shared/big.bin" || fail "shared big.bin differs"
 "$BLIFT" share ls demo | grep -q pw1234 && fail "password leaked in share ls"
 ok "share create (password) + anonymous share get"
 
+# Inboxes (upload links): created like any share, listed with their limits, nothing to download.
+INBOX=$("$BLIFT" share create demo --upload --max-uploads 3 --max-size 10M 2>/dev/null) || fail "share create --upload"
+"$BLIFT" share ls demo | grep -F "$INBOX" | grep -q "0/3 · 0 B/10.0 MiB" || fail "inbox in share ls: $("$BLIFT" share ls demo)"
+"$BLIFT" share get "$INBOX" -o "$WORK/inbox" 2>/dev/null && fail "share get on an inbox"
+"$BLIFT" share create demo greeting.txt --upload 2>/dev/null && fail "--upload with a file"
+ok "share create --upload (inbox), share ls usage, share get refuses it"
+
 # Direct links: plain curl and wget save the file under its own name; share get takes them too.
 "$BLIFT" share create demo greeting.txt >"$WORK/share.out" 2>"$WORK/share.err"
 DIRECT=$(grep -oE 'https?://[^ ]+/s/[0-9A-Za-z]+/greeting\.txt' "$WORK/share.err")

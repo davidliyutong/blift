@@ -47,16 +47,46 @@ func parseExpires(s string) (time.Duration, error) {
 	return d, nil
 }
 
+// parseSize parses sizes like 500M, 10G, 1.5TiB or 4096 (bytes); units are powers of 1024.
+func parseSize(s string) (int64, error) {
+	u := strings.ToUpper(strings.TrimSpace(s))
+	num, unit := u, ""
+	if i := strings.IndexFunc(u, func(r rune) bool { return (r < '0' || r > '9') && r != '.' }); i >= 0 {
+		num, unit = u[:i], strings.TrimSpace(u[i:])
+	}
+	mult, ok := map[string]float64{"": 1, "K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40}[strings.TrimSuffix(strings.TrimSuffix(unit, "B"), "I")]
+	n, err := strconv.ParseFloat(num, 64)
+	if !ok || err != nil || n*mult < 1 {
+		return 0, errors.New(i18n.T("bad_size", s))
+	}
+	return int64(n * mult), nil
+}
+
 func shareCreateCmd() *cobra.Command {
-	var password, expires string
-	var maxDownloads int64
+	var password, expires, maxSize string
+	var maxDownloads, maxUploads int64
+	var upload bool
 	c := &cobra.Command{
 		Use:               "create <project> [blob]",
 		Short:             i18n.T("cmd.share.create"),
 		Args:              cobra.RangeArgs(1, 2),
 		ValidArgsFunction: completeArgs(completeProjects, completeBlobs, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			req := api.CreateShare{Password: password, MaxDownloads: maxDownloads}
+			// An upload link (inbox) covers the whole project and has its own limits.
+			if upload && (len(args) == 2 || maxDownloads > 0) || !upload && (maxUploads > 0 || maxSize != "") {
+				return errors.New(i18n.T("share.upload_flags"))
+			}
+			req := api.CreateShare{Password: password, MaxDownloads: maxDownloads, MaxUploads: maxUploads}
+			if upload {
+				req.Mode = "upload"
+			}
+			if maxSize != "" {
+				n, err := parseSize(maxSize)
+				if err != nil {
+					return err
+				}
+				req.MaxUploadBytes = n
+			}
 			if expires != "" {
 				d, err := parseExpires(expires)
 				if err != nil {
@@ -82,6 +112,10 @@ func shareCreateCmd() *cobra.Command {
 				return orJSON(err, s)
 			}
 			fmt.Println(s.URL)
+			if s.Mode == "upload" {
+				info("share.created_upload", ui.TimePtr(s.ExpiresAt, i18n.T("never")))
+				return nil
+			}
 			info("share.created", ui.TimePtr(s.ExpiresAt, i18n.T("never")))
 			if s.DownloadURL != nil && !s.HasPassword {
 				info("share.direct", *s.DownloadURL)
@@ -92,6 +126,9 @@ func shareCreateCmd() *cobra.Command {
 	c.Flags().StringVar(&password, "password", "", i18n.T("flag.share_password"))
 	c.Flags().StringVar(&expires, "expires", "", i18n.T("flag.expires"))
 	c.Flags().Int64Var(&maxDownloads, "max-downloads", 0, i18n.T("flag.max_downloads"))
+	c.Flags().BoolVar(&upload, "upload", false, i18n.T("flag.upload_link"))
+	c.Flags().Int64Var(&maxUploads, "max-uploads", 0, i18n.T("flag.max_uploads"))
+	c.Flags().StringVar(&maxSize, "max-size", "", i18n.T("flag.max_size"))
 	_ = c.RegisterFlagCompletionFunc("expires", fixed("1h", "1d", "7d", "30d"))
 	return c
 }
@@ -124,20 +161,32 @@ func shareLsCmd() *cobra.Command {
 			rows := make([][]string, 0, len(shares))
 			for _, s := range shares {
 				target := s.ProjectName + "/" + strOr(s.BlobName, "*")
-				downloads := strconv.FormatInt(s.DownloadCount, 10)
-				if s.MaxDownloads != nil {
-					downloads += "/" + strconv.FormatInt(*s.MaxDownloads, 10)
-				}
 				pw := i18n.T("no")
 				if s.HasPassword {
 					pw = i18n.T("yes")
 				}
-				rows = append(rows, []string{s.ID, target, pw, ui.TimePtr(s.ExpiresAt, i18n.T("never")), downloads, s.URL})
+				rows = append(rows, []string{s.ID, i18n.T("share.mode." + s.Mode), target, pw, ui.TimePtr(s.ExpiresAt, i18n.T("never")), shareUsage(s), s.URL})
 			}
-			table([]string{"col.id", "col.target", "col.password", "col.expires", "col.downloads", "col.url"}, rows)
+			table([]string{"col.id", "col.type", "col.target", "col.password", "col.expires", "col.usage", "col.url"}, rows)
 			return nil
 		},
 	}
+}
+
+// shareUsage: downloads of a download link, files and bytes received by an upload link, each
+// with its limit ("3/10", "2/10 · 1.2 GB/5.0 GB").
+func shareUsage(s api.Share) string {
+	of := func(n string, limit *int64, format func(int64) string) string {
+		if limit != nil {
+			n += "/" + format(*limit)
+		}
+		return n
+	}
+	count := func(n int64) string { return strconv.FormatInt(n, 10) }
+	if s.Mode == "upload" {
+		return of(count(s.UploadCount), s.MaxUploads, count) + " · " + of(ui.Size(s.UploadBytes), s.MaxUploadBytes, ui.Size)
+	}
+	return of(count(s.DownloadCount), s.MaxDownloads, count)
 }
 
 func shareRmCmd() *cobra.Command {
@@ -247,6 +296,9 @@ func openShare(ctx context.Context, c *api.Client, token, password string) (*api
 	sh, err := c.PublicShare(ctx, token, "", "")
 	if err != nil {
 		return nil, "", err
+	}
+	if sh.Share.Mode == "upload" {
+		return nil, "", errors.New(i18n.T("share.is_upload"))
 	}
 	if !sh.Share.Locked {
 		return sh, "", allShareFiles(ctx, c, token, "", sh)

@@ -66,16 +66,16 @@ async function upload(projectId, name, data, extra = {}) {
   return api("POST", `/api/uploads/${init.blob_id}/complete`, {}); // server lists the parts itself
 }
 
-/** Anonymous upload through a project inbox (single or multipart); returns {name, size}. */
-async function inboxUpload(token, name, data) {
-  const init = await api("POST", `/api/public/inbox/${token}/uploads`, { name, size: data.length }, { auth: null, expect: 201 });
+/** Anonymous upload through an upload link (single or multipart); returns {name, size}. */
+async function shareUpload(token, access, name, data) {
+  const init = await api("POST", `/api/public/shares/${token}/uploads`, { name, size: data.length }, { auth: null, headers: access ? { "x-share-access": access } : {}, expect: 201 });
   const headers = { "x-upload-token": init.upload_token };
   if (init.mode === "single") {
     const r = await fetch(init.url, { method: "PUT", body: data });
     assert.equal(r.status, 200, `PUT single → ${r.status} ${await r.text()}`);
   } else {
     const nums = Array.from({ length: init.part_count }, (_, i) => i + 1);
-    const { urls } = await api("POST", `/api/public/inbox/${token}/uploads/${init.blob_id}/parts`, { part_numbers: nums }, { auth: null, headers });
+    const { urls } = await api("POST", `/api/public/shares/${token}/uploads/${init.blob_id}/parts`, { part_numbers: nums }, { auth: null, headers });
     await Promise.all(
       nums.map(async (n) => {
         const r = await fetch(urls[n], { method: "PUT", body: data.subarray((n - 1) * init.part_size, n * init.part_size) });
@@ -83,7 +83,7 @@ async function inboxUpload(token, name, data) {
       }),
     );
   }
-  return api("POST", `/api/public/inbox/${token}/uploads/${init.blob_id}/complete`, {}, { auth: null, headers });
+  return api("POST", `/api/public/shares/${token}/uploads/${init.blob_id}/complete`, {}, { auth: null, headers });
 }
 
 // Minimal OIDC provider imitating Authentik (issuer ends with "/application/o/<slug>/").
@@ -450,44 +450,67 @@ assert.equal(lifetimes["forever-host"], null);
 assert.ok(Math.abs(lifetimes["day-host"] - (Date.now() + 86_400_000)) < 120_000, `day session expires_at ${lifetimes["day-host"]}`);
 step("API keys: single use, unlimited, sessions linked to the key, delete signs them out, sign-in lifetime");
 
-// Inbox: anonymous uploads into a project (off by default, link visible to editors and owners).
+// Upload links (inboxes): shares with mode "upload" take anonymous uploads into a project.
 const ib = await api("POST", "/api/projects", { name: "inbox", description: "drop files here" }, { expect: 201 });
-assert.deepEqual([ib.inbox_enabled, ib.inbox_url], [false, null]);
-const ibOn = await api("PATCH", `/api/projects/${ib.id}`, { inbox_enabled: true });
-assert.match(ibOn.inbox_url, /\/i\/[0-9A-Za-z]{12}$/);
-let ibToken = ibOn.inbox_url.split("/i/")[1];
-const ibInfo = await api("GET", `/api/public/inbox/${ibToken}`, undefined, { auth: null });
-assert.deepEqual(ibInfo.inbox, { name: "inbox", description: "drop files here", owner: "admin" });
+assert.ok(!("inbox_enabled" in ib) && !("inbox_url" in ib), "projects no longer have an inbox switch");
+await api("POST", `/api/projects/${ib.id}/members`, { user: "alice-2", role: "viewer" }, { expect: 201 });
+const asBob = (method, path, body, expect) => api(method, path, body, { auth: null, headers: { cookie: l2.session }, expect });
+assert.equal(await errCode(asBob("POST", "/api/shares", { project_id: ib.id, mode: "upload" }, 403)), "forbidden"); // editors and up
+assert.equal(await errCode(api("POST", "/api/shares", { project_id: ib.id, mode: "both" }, { expect: 400 })), "bad_request");
+assert.equal(await errCode(api("POST", "/api/shares", { project_id: ib.id, mode: "upload", blob_id: "x" }, { expect: 400 })), "bad_request");
+const up = await api("POST", "/api/shares", { project_id: ib.id, mode: "upload", password: "letmein", max_downloads: 5 }, { expect: 201 });
+assert.deepEqual([up.mode, up.blob_id, up.download_url, up.max_downloads, up.max_uploads, up.upload_count], ["upload", null, null, null, null, 0]);
+const ibToken = up.token;
+// Locked until unlocked; uploaders learn the project and the limits, never its files.
+const ibLocked = await api("GET", `/api/public/shares/${ibToken}`, undefined, { auth: null });
+assert.deepEqual([ibLocked.share.mode, ibLocked.share.locked, ibLocked.blobs], ["upload", true, undefined]);
+assert.equal(await errCode(api("POST", `/api/public/shares/${ibToken}/uploads`, { name: "x", size: 1 }, { auth: null, expect: 403 })), "invalid_password");
+const { access_token: ibAccess } = await api("POST", `/api/public/shares/${ibToken}/unlock`, { password: "letmein" }, { auth: null });
+const ibHeaders = { "x-share-access": ibAccess };
+const ibInfo = await api("GET", `/api/public/shares/${ibToken}`, undefined, { auth: null, headers: ibHeaders });
+assert.deepEqual(
+  [ibInfo.share.name, ibInfo.share.description, ibInfo.share.creator, ibInfo.share.locked, ibInfo.blobs, ibInfo.share.file_count],
+  ["inbox", "drop files here", "admin", false, undefined, undefined],
+);
 const report = Buffer.from("quarterly numbers");
-assert.deepEqual(await inboxUpload(ibToken, "report.pdf", report), { name: "report.pdf", size: report.length });
-assert.equal((await inboxUpload(ibToken, "report.pdf", report)).name, "report (1).pdf"); // never replaces
-assert.equal((await inboxUpload(ibToken, "big.bin", big)).size, big.length); // multipart
+assert.deepEqual(await shareUpload(ibToken, ibAccess, "report.pdf", report), { name: "report.pdf", size: report.length });
+assert.equal((await shareUpload(ibToken, ibAccess, "report.pdf", report)).name, "report (1).pdf"); // never replaces
+assert.equal((await shareUpload(ibToken, ibAccess, "big.bin", big)).size, big.length); // multipart
 const ibFiles = (await api("GET", `/api/projects/${ib.id}/blobs?sort=name&order=asc`)).blobs;
 assert.deepEqual(ibFiles.map((b) => [b.name, b.via_inbox, b.uploader]), [["big.bin", true, null], ["report (1).pdf", true, null], ["report.pdf", true, null]]);
 assert.equal((await api("GET", `/api/projects/${ib.id}`)).used_bytes, 2 * report.length + big.length);
+const upNow = (await api("GET", `/api/shares?project_id=${ib.id}`)).shares.find((x) => x.id === up.id);
+assert.deepEqual([upNow.upload_count, upNow.upload_bytes, upNow.download_count], [3, 2 * report.length + big.length, 0]);
+// Nothing to download through it, in the API or for wget.
+assert.equal(await errCode(api("GET", `/api/public/shares/${ibToken}/blobs/${ibFiles[0].id}/download`, undefined, { auth: null, headers: ibHeaders, expect: 404 })), "not_found");
+assert.equal((await viaLink(`/s/${ibToken}`)).status, 404);
 // An upload token only works for its own upload.
-const ia = await api("POST", `/api/public/inbox/${ibToken}/uploads`, { name: "a.txt", size: 1 }, { auth: null, expect: 201 });
-const ibb = await api("POST", `/api/public/inbox/${ibToken}/uploads`, { name: "b.txt", size: 1 }, { auth: null, expect: 201 });
+const ia = await api("POST", `/api/public/shares/${ibToken}/uploads`, { name: "a.txt", size: 1 }, { auth: null, headers: ibHeaders, expect: 201 });
+const ibb = await api("POST", `/api/public/shares/${ibToken}/uploads`, { name: "b.txt", size: 1 }, { auth: null, headers: ibHeaders, expect: 201 });
 const wrongTok = { "x-upload-token": ibb.upload_token };
-assert.equal(await errCode(api("POST", `/api/public/inbox/${ibToken}/uploads/${ia.blob_id}/complete`, {}, { auth: null, headers: wrongTok, expect: 404 })), "not_found");
-await api("DELETE", `/api/public/inbox/${ibToken}/uploads/${ia.blob_id}`, undefined, { auth: null, headers: { "x-upload-token": ia.upload_token }, expect: 204 });
-// Viewers know the inbox is on but do not get its link, and cannot change it.
-await api("POST", `/api/projects/${ib.id}/members`, { user: "alice-2", role: "viewer" }, { expect: 201 });
-const asBob = (method, path, body, expect) => api(method, path, body, { auth: null, headers: { cookie: l2.session }, expect });
-const ibViewer = await asBob("GET", `/api/projects/${ib.id}`);
-assert.deepEqual([ibViewer.inbox_enabled, ibViewer.inbox_url], [true, null]);
-assert.equal(await errCode(asBob("PATCH", `/api/projects/${ib.id}`, { inbox_enabled: false }, 403)), "forbidden");
-// Reset and disable: the old link stops working at once, pending uploads too.
-const reset = await api("POST", `/api/projects/${ib.id}/inbox/reset`);
-assert.notEqual(reset.inbox_url, ibOn.inbox_url);
-assert.equal(await errCode(api("GET", `/api/public/inbox/${ibToken}`, undefined, { auth: null, expect: 404 })), "not_found");
-// b.txt was started through the old link with its own (valid) upload token.
-assert.equal(await errCode(api("POST", `/api/public/inbox/${ibToken}/uploads/${ibb.blob_id}/complete`, {}, { auth: null, headers: wrongTok, expect: 404 })), "not_found");
-ibToken = reset.inbox_url.split("/i/")[1];
-await api("PATCH", `/api/projects/${ib.id}`, { inbox_enabled: false });
-assert.equal(await errCode(api("GET", `/api/public/inbox/${ibToken}`, undefined, { auth: null, expect: 404 })), "not_found");
-assert.equal(await errCode(api("POST", `/api/projects/${ib.id}/inbox/reset`, undefined, { expect: 409 })), "conflict");
-step("inbox: anonymous single + multipart uploads, auto-rename, upload tokens, viewer view, reset + disable");
+assert.equal(await errCode(api("POST", `/api/public/shares/${ibToken}/uploads/${ia.blob_id}/complete`, {}, { auth: null, headers: wrongTok, expect: 404 })), "not_found");
+await api("DELETE", `/api/public/shares/${ibToken}/uploads/${ia.blob_id}`, undefined, { auth: null, headers: { "x-upload-token": ia.upload_token }, expect: 204 });
+// Limits per link: a file larger than the size left is refused when it starts; uploads that race
+// for the last slot both start, but only one completes; then the link is used up.
+const lim = await api("POST", "/api/shares", { project_id: ib.id, mode: "upload", max_uploads: 1, max_upload_bytes: 2 * report.length - 1 }, { expect: 201 });
+assert.equal(await errCode(api("POST", `/api/public/shares/${lim.token}/uploads`, { name: "huge.bin", size: 2 * report.length }, { auth: null, expect: 413 })), "upload_too_large");
+const race = [];
+for (const name of ["one.txt", "two.txt"]) {
+  const init = await api("POST", `/api/public/shares/${lim.token}/uploads`, { name, size: report.length }, { auth: null, expect: 201 });
+  assert.equal((await fetch(init.url, { method: "PUT", body: report })).status, 200);
+  race.push(init);
+}
+const complete = (init, expect) =>
+  api("POST", `/api/public/shares/${lim.token}/uploads/${init.blob_id}/complete`, {}, { auth: null, headers: { "x-upload-token": init.upload_token }, expect });
+assert.deepEqual(await complete(race[0]), { name: "one.txt", size: report.length });
+assert.equal(await errCode(complete(race[1], 410)), "share_exhausted");
+assert.equal(await errCode(api("GET", `/api/public/shares/${lim.token}`, undefined, { auth: null, expect: 410 })), "share_exhausted");
+assert.equal(await errCode(api("POST", `/api/public/shares/${lim.token}/uploads`, { name: "three.txt", size: 1 }, { auth: null, expect: 410 })), "share_exhausted");
+// Deleting the link stops it at once, uploads under way too (b.txt has a valid upload token).
+await api("DELETE", `/api/shares/${up.id}`, undefined, { expect: 204 });
+assert.equal(await errCode(api("GET", `/api/public/shares/${ibToken}`, undefined, { auth: null, expect: 404 })), "not_found");
+assert.equal(await errCode(api("POST", `/api/public/shares/${ibToken}/uploads/${ibb.blob_id}/complete`, {}, { auth: null, headers: wrongTok, expect: 404 })), "not_found");
+step("upload links: password, single + multipart, auto-rename, nothing to download, upload tokens, file/size limits, delete");
 
 // Members
 const second = await api("POST", "/api/projects", { name: "demo2" }, { auth: tok.token, expect: 201 });
@@ -526,14 +549,14 @@ step("an API-key sign-in without expiry survives GC until revoked");
 await api("DELETE", `/api/projects/${lp.id}`, undefined, { expect: 204 }); // releases its usage at once
 await api("DELETE", `/api/projects/${ib.id}`, undefined, { expect: 204 });
 await api("DELETE", `/api/projects/${elsewhere.id}`, undefined, { expect: 204 });
-const inboxBytes = 2 * report.length + big.length;
+const inboxBytes = 3 * report.length + big.length; // report.pdf, report (1).pdf, big.bin, one.txt
 const stats = await api("GET", "/api/admin/stats?days=7");
 assert.equal(stats.series.length, 7);
 const today = stats.series.at(-1);
 const listingBytes = names.reduce((n, x) => n + Buffer.byteLength(x), 0);
 assert.ok(
   today.requests > 20 &&
-    today.uploads === 3 + names.length + 3 &&
+    today.uploads === 3 + names.length + 4 &&
     today.upload_bytes === small.length + big.length + small2.length + listingBytes + inboxBytes,
   JSON.stringify(today),
 );

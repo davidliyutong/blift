@@ -1,30 +1,57 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
-import { useParams } from "react-router";
-import { Button, cn } from "@cloudflare/kumo";
-import { LinkBreakIcon, TrayArrowDownIcon, UploadSimpleIcon } from "@phosphor-icons/react";
-import { api, ApiError } from "@/api";
-import { useI18n } from "@/i18n";
-import { useAsync } from "@/lib/hooks";
-import { useSession } from "@/lib/session";
-import { inboxApi, UploadManager } from "@/lib/upload";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type ReactNode } from "react";
+import { Badge, Button, cn } from "@cloudflare/kumo";
+import { TrayArrowDownIcon, UploadSimpleIcon } from "@phosphor-icons/react";
+import type { PublicShare } from "@/api";
+import { useT } from "@/i18n";
+import { formatBytes } from "@/lib/format";
+import { shareUploadApi, UploadManager } from "@/lib/upload";
 import { Card, CenteredLayout } from "@/components/CenteredLayout";
-import { Loading } from "@/components/Page";
 import { UploadRow } from "@/components/UploadPanel";
 
-/** Anonymous uploads into a project inbox (/i/:token). Uploaders see only their own uploads. */
-export function InboxPage() {
-  const { t, errMsg } = useI18n();
-  const { info } = useSession();
-  const { token = "" } = useParams();
-  const res = useAsync(() => api.inbox.get(token), [token]);
-  const manager = useMemo(() => new UploadManager(inboxApi(token)), [token]);
+type UploadShare = Extract<PublicShare, { mode: "upload" }>;
+
+/** What an upload link still takes, less the files sent from this page (`files`, `bytes`). */
+export function UploadLimits({ share, files = 0, bytes = 0 }: { share: UploadShare; files?: number; bytes?: number }) {
+  const t = useT();
+  const filesLeft = share.max_uploads != null ? Math.max(0, share.max_uploads - share.upload_count - files) : null;
+  const bytesLeft = share.max_upload_bytes != null ? Math.max(0, share.max_upload_bytes - share.upload_bytes - bytes) : null;
+  return (
+    <>
+      {filesLeft != null && <Badge variant="neutral">{t("pub.uploadsLeft", { n: filesLeft })}</Badge>}
+      {bytesLeft != null && <Badge variant="neutral">{t("pub.bytesLeft", { size: formatBytes(bytesLeft) })}</Badge>}
+    </>
+  );
+}
+
+/**
+ * An unlocked upload link (/s/:token of a share with mode "upload"): anonymous uploads into the
+ * project. Uploaders see only their own uploads.
+ */
+export function ShareUploadView({
+  token,
+  access,
+  share,
+  meta,
+  footer,
+}: {
+  token: string;
+  access?: string;
+  share: UploadShare;
+  /** Who shared it and when it expires, followed by `badges`. */
+  meta: (badges: ReactNode) => ReactNode;
+  footer: string;
+}) {
+  const t = useT();
+  const manager = useMemo(() => new UploadManager(shareUploadApi(token, access)), [token, access]);
   const items = useSyncExternalStore(manager.subscribe, manager.snapshot);
   const fileInput = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
   const [dragging, setDragging] = useState(false);
 
   const active = items.some((i) => i.status === "queued" || i.status === "uploading" || i.status === "completing");
-  const done = items.filter((i) => i.status === "done").length;
+  const sent = items.filter((i) => i.status === "done");
+  const done = sent.length;
+  const sentBytes = sent.reduce((sum, i) => sum + i.total, 0);
 
   // Leaving the page would abandon running uploads.
   useEffect(() => {
@@ -34,32 +61,8 @@ export function InboxPage() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [active]);
 
-  const footer = t("pub.poweredBy", { name: info.name });
-
-  if (res.loading && !res.data) {
-    return (
-      <CenteredLayout footer={footer}>
-        <Loading />
-      </CenteredLayout>
-    );
-  }
-
-  if (res.error || !res.data) {
-    const missing = res.error instanceof ApiError && res.error.code === "not_found";
-    return (
-      <CenteredLayout footer={footer} title={t("inbox.pubNotFound")}>
-        <Card className="flex flex-col items-center gap-3 text-center">
-          <LinkBreakIcon size={48} weight="duotone" className="text-kumo-subtle" />
-          <h1 className="m-0 text-xl font-semibold">{missing ? t("inbox.pubNotFound") : errMsg(res.error)}</h1>
-          <p className="m-0 text-sm text-kumo-subtle">{t("inbox.pubNotFoundDesc")}</p>
-        </Card>
-      </CenteredLayout>
-    );
-  }
-
-  const { inbox } = res.data;
   const add = (files: FileList | File[] | null) => {
-    if (files && files.length > 0) manager.add(token, inbox.name, Array.from(files));
+    if (files && files.length > 0) manager.add(token, share.name, Array.from(files));
   };
 
   const onDragEnter = (e: DragEvent) => {
@@ -80,16 +83,17 @@ export function InboxPage() {
   };
 
   return (
-    <CenteredLayout footer={footer} title={inbox.name} width="max-w-[560px]">
+    <CenteredLayout footer={footer} title={share.name} width="max-w-[560px]">
       <div onDragEnter={onDragEnter} onDragOver={(e) => e.preventDefault()} onDragLeave={onDragLeave} onDrop={onDrop}>
         <Card className="flex flex-col gap-5">
           <div className="flex flex-col items-center gap-2 text-center">
             <div className="flex size-14 items-center justify-center rounded-full bg-kumo-recessed">
               <TrayArrowDownIcon size={28} weight="duotone" className="text-kumo-brand" />
             </div>
-            <h1 className="m-0 text-xl font-semibold break-all">{inbox.name}</h1>
-            <p className="m-0 text-sm text-kumo-subtle">{t("inbox.pubInvite", { name: inbox.owner })}</p>
-            {inbox.description && <p className="m-0 text-sm text-pretty whitespace-pre-line">{inbox.description}</p>}
+            <h1 className="m-0 text-xl font-semibold break-all">{share.name}</h1>
+            <p className="m-0 text-sm text-kumo-subtle">{t("inbox.pubInvite", { name: share.creator })}</p>
+            {share.description && <p className="m-0 text-sm text-pretty whitespace-pre-line">{share.description}</p>}
+            {meta(<UploadLimits share={share} files={done} bytes={sentBytes} />)}
           </div>
 
           <button

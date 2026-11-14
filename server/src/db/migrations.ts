@@ -205,6 +205,21 @@ ALTER TABLE api_keys ADD COLUMN session_ttl INTEGER DEFAULT 7776000;
 ALTER TABLE storages ADD COLUMN location TEXT NOT NULL DEFAULT '';
 `,
   },
+  {
+    // Upload links: a share with mode 'upload' is an inbox (anonymous uploads into its project),
+    // with the password, expiry and limits of any share. They replace the per-project inbox;
+    // existing inbox links are dropped.
+    name: "0006_upload_shares",
+    sql: `
+ALTER TABLE shares ADD COLUMN mode TEXT NOT NULL DEFAULT 'download';
+ALTER TABLE shares ADD COLUMN max_uploads INTEGER;
+ALTER TABLE shares ADD COLUMN max_upload_bytes INTEGER;
+ALTER TABLE shares ADD COLUMN upload_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE shares ADD COLUMN upload_bytes INTEGER NOT NULL DEFAULT 0;
+DROP INDEX projects_inbox;
+ALTER TABLE projects DROP COLUMN inbox_token;
+`,
+  },
 ];
 
 const split = (sql: string) =>

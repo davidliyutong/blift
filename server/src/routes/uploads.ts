@@ -99,7 +99,7 @@ export async function partUrls(c: Ctx, blob: BlobRow, nums: unknown) {
 
 /**
  * "a.txt" → "a (1).txt", "a (2).txt", …: the first name no active file of the project uses.
- * Inbox uploads never replace a file; they take the next free name.
+ * Uploads through an upload link never replace a file; they take the next free name.
  */
 export async function freeName(db: DB, projectId: string, name: string): Promise<string> {
   const dot = name.lastIndexOf(".");
@@ -118,7 +118,7 @@ export async function freeName(db: DB, projectId: string, name: string): Promise
 
 /**
  * complete: CompleteMultipartUpload + HEAD to verify the size, then the blob becomes active.
- * Returns the final name (inbox uploads may have been renamed).
+ * Returns the final name (uploads through an upload link may have been renamed).
  */
 export async function finishUpload(c: Ctx, blob: BlobRow, project: Pick<ProjectRow, "id" | "owner_id">, given?: unknown) {
   const { s3 } = await storageFor(c.env, blob.storage_id);

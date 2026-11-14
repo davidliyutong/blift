@@ -48,10 +48,6 @@ export interface Project {
   storage_location: string;
   used_bytes: number;
   blob_count: number;
-  /** The project accepts anonymous uploads at inbox_url. */
-  inbox_enabled: boolean;
-  /** Only sent to editors and owners. */
-  inbox_url: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -63,7 +59,7 @@ export interface Blob {
   size: number;
   content_type: string;
   uploader: UserRef | null;
-  /** Uploaded anonymously through the project's inbox. */
+  /** Uploaded anonymously through an upload link (inbox). */
   via_inbox: boolean;
   download_count: number;
   created_at: number;
@@ -76,10 +72,14 @@ export interface Member {
   created_at: number;
 }
 
+export type ShareMode = "download" | "upload";
+
 export interface Share {
   id: string;
   token: string;
   url: string;
+  /** upload = an inbox: anyone with the link can add files to the project, nothing else. */
+  mode: ShareMode;
   project_id: string;
   project_name: string;
   blob_id: string | null;
@@ -90,6 +90,11 @@ export interface Share {
   expires_at: number | null;
   max_downloads: number | null;
   download_count: number;
+  /** Upload links: limits on files and on their total size (null = none), and what came in. */
+  max_uploads: number | null;
+  max_upload_bytes: number | null;
+  upload_count: number;
+  upload_bytes: number;
   view_count: number;
   creator: UserRef;
   created_at: number;
@@ -144,11 +149,7 @@ export interface UploadInit {
   expires_at: number;
 }
 
-export interface InboxInfo {
-  inbox: { name: string; description: string; owner: string };
-}
-
-export interface InboxUploadInit extends UploadInit {
+export interface ShareUploadInit extends UploadInit {
   /** Sent as X-Upload-Token on the parts / complete / abort calls of this upload. */
   upload_token: string;
 }
@@ -161,21 +162,38 @@ export interface CliLoginRequest {
   expires_at: number;
 }
 
+interface PublicShareBase {
+  token: string;
+  name: string;
+  has_password: boolean;
+  locked: boolean;
+  expires_at: number | null;
+  creator: string;
+  created_at: number;
+}
+
+export type PublicShare =
+  | (PublicShareBase & {
+      mode: "download";
+      kind: "blob" | "project";
+      max_downloads: number | null;
+      download_count: number;
+      file_count?: number;
+      total_bytes?: number;
+    })
+  | (PublicShareBase & {
+      /** An upload link: never lists files. `name` is the project's. */
+      mode: "upload";
+      kind: "project";
+      description: string;
+      max_uploads: number | null;
+      upload_count: number;
+      max_upload_bytes: number | null;
+      upload_bytes: number;
+    });
+
 export interface PublicShareInfo {
-  share: {
-    token: string;
-    kind: "blob" | "project";
-    name: string;
-    has_password: boolean;
-    locked: boolean;
-    expires_at: number | null;
-    max_downloads: number | null;
-    download_count: number;
-    creator: string;
-    created_at: number;
-    file_count?: number;
-    total_bytes?: number;
-  };
+  share: PublicShare;
   blobs?: PublicBlob[];
   /** Set when a project share has more files than this page (pass it as `cursor`). */
   next_cursor?: string | null;
