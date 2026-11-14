@@ -9,14 +9,15 @@
 import { Hono } from "hono";
 import { all, now, one, placeholders, run, stmt, type DB, type Stmt } from "../db";
 import type { AppEnv, Ctx, UserRow } from "../env";
-import { ApiError, badRequest, conflict } from "../lib/errors";
+import { ApiError, badRequest, conflict, notFound } from "../lib/errors";
 import { blobName, body, int, optStr } from "../lib/http";
 import { newId, randomString } from "../lib/ids";
 import type { Part } from "../lib/s3";
-import { loadBlob, loadProject, toBlob, type BlobRow, type ProjectRow } from "../services/projects";
+import { loadBlob, loadProject, type BlobRow, type ProjectRow } from "../services/projects";
 import { getSettings } from "../services/settings";
 import { addStats } from "../services/stats";
 import { objectKey, storageFor } from "../services/storage";
+import { requireDir, withPath } from "../services/tree";
 import { hasQuotaFor } from "../services/users";
 
 const MiB = 1024 ** 2;
@@ -29,9 +30,30 @@ export const UPLOAD_TTL = 6 * 3600;
 /** Fixed part size (R2 requires equal parts), a whole number of MiB, ≤ 10 000 parts. */
 export const partSizeFor = (size: number) => Math.max(MIN_PART, Math.ceil(size / MAX_PARTS / MiB) * MiB);
 
-const nameTaken = () => conflict("name_taken", "a file with this name already exists");
+const nameTaken = () => conflict("name_taken", "a file or directory with this name already exists");
 
-type UploadOpts = { name: string; size: number; contentType: string; overwrite: boolean; uploaderId: string | null; viaInbox: boolean };
+type UploadOpts = {
+  name: string;
+  /** The directory the file goes into ('' = root); the caller has checked it (requireDir). */
+  parentId: string;
+  size: number;
+  contentType: string;
+  overwrite: boolean;
+  uploaderId: string | null;
+  viaInbox: boolean;
+  /** Always one PUT, whatever the size (WebDAV relays the request body; S3 takes up to 5 GiB). */
+  single?: boolean;
+};
+
+/** The active blob called `name` in a directory, if any. */
+const blobAt = (db: DB, projectId: string, parentId: string, name: string) =>
+  one<Pick<BlobRow, "id" | "size" | "kind">>(
+    db,
+    "SELECT id, size, kind FROM blobs WHERE project_id = ? AND parent_id = ? AND name = ? AND status = 'active'",
+    projectId,
+    parentId,
+    name,
+  );
 
 /** Validates an init request body ({name, size, content_type, overwrite}). */
 export function uploadRequest(b: Record<string, unknown>) {
@@ -45,8 +67,11 @@ export function uploadRequest(b: Record<string, unknown>) {
 
 /** init: checks name and quota, creates the pending blob (+ multipart upload) and signs the PUT. */
 export async function startUpload(c: Ctx, p: Pick<ProjectRow, "id" | "owner_id" | "storage_id">, o: UploadOpts) {
-  if (!o.overwrite && !o.viaInbox && (await one(c.env.DB, "SELECT 1 AS x FROM blobs WHERE project_id = ? AND name = ? AND status = 'active'", p.id, o.name)))
-    throw nameTaken();
+  if (!o.viaInbox) {
+    // A file may replace a file (overwrite), never a directory.
+    const existing = await blobAt(c.env.DB, p.id, o.parentId, o.name);
+    if (existing && (!o.overwrite || existing.kind === "dir")) throw nameTaken();
+  }
   const owner = await one<UserRow>(c.env.DB, "SELECT * FROM users WHERE id = ?", p.owner_id);
   if (!owner || !hasQuotaFor(owner, await getSettings(c.env.DB), o.size))
     throw new ApiError(403, "quota_exceeded", "storage quota of the project owner exceeded");
@@ -55,16 +80,17 @@ export async function startUpload(c: Ctx, p: Pick<ProjectRow, "id" | "owner_id" 
   const id = newId();
   const key = objectKey(storage, p.id, id);
   const expires_at = now() + UPLOAD_TTL * 1000;
-  const multipart = o.size > SINGLE_MAX;
+  const multipart = !o.single && o.size > SINGLE_MAX;
   const partSize = multipart ? partSizeFor(o.size) : null;
   const uploadId = multipart ? await s3.createMultipart(key, o.contentType) : null;
 
   await run(
     c.env.DB,
-    `INSERT INTO blobs (id, project_id, storage_id, object_key, name, size, content_type, status, upload_id, part_size, overwrite, uploader_id, via_inbox, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO blobs (id, project_id, parent_id, storage_id, object_key, name, size, content_type, status, upload_id, part_size, overwrite, uploader_id, via_inbox, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
     id,
     p.id,
+    o.parentId,
     storage.id,
     key,
     o.name,
@@ -98,18 +124,19 @@ export async function partUrls(c: Ctx, blob: BlobRow, nums: unknown) {
 }
 
 /**
- * "a.txt" → "a (1).txt", "a (2).txt", …: the first name no active file of the project uses.
+ * "a.txt" → "a (1).txt", "a (2).txt", …: the first name nothing in the directory uses.
  * Uploads through an upload link never replace a file; they take the next free name.
  */
-export async function freeName(db: DB, projectId: string, name: string): Promise<string> {
+export async function freeName(db: DB, projectId: string, parentId: string, name: string): Promise<string> {
   const dot = name.lastIndexOf(".");
   const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
   const numbered = (n: string) => `${stem.slice(0, Math.max(1, 255 - ext.length - n.length - 3))} (${n})${ext}`;
   const tries = [name, ...Array.from({ length: 20 }, (_, i) => numbered(String(i + 1)))];
   const taken = await all<{ name: string }>(
     db,
-    `SELECT name FROM blobs INDEXED BY blobs_project_name WHERE project_id = ? AND status = 'active' AND name IN (${placeholders(tries.length)})`,
+    `SELECT name FROM blobs INDEXED BY blobs_project_name WHERE project_id = ? AND parent_id = ? AND status = 'active' AND name IN (${placeholders(tries.length)})`,
     projectId,
+    parentId,
     ...tries,
   );
   const used = new Set(taken.map((r) => r.name));
@@ -141,17 +168,17 @@ export async function finishUpload(c: Ctx, blob: BlobRow, project: Pick<ProjectR
     throw badRequest(`size mismatch: declared ${blob.size} bytes, stored ${head.size} bytes`);
   }
 
-  let existing = await one<{ id: string; size: number }>(
-    db,
-    "SELECT id, size FROM blobs WHERE project_id = ? AND name = ? AND status = 'active'",
-    blob.project_id,
-    blob.name,
-  );
+  // The directory may have been deleted while the bytes were on their way.
+  if (blob.parent_id && !(await one(db, "SELECT 1 AS x FROM blobs WHERE id = ? AND status = 'active'", blob.parent_id))) {
+    await discard();
+    throw notFound("directory");
+  }
+  let existing = await blobAt(db, blob.project_id, blob.parent_id, blob.name);
   let name = blob.name;
   if (existing && blob.via_inbox) {
-    name = await freeName(db, blob.project_id, blob.name);
+    name = await freeName(db, blob.project_id, blob.parent_id, blob.name);
     existing = null;
-  } else if (existing && !blob.overwrite) {
+  } else if (existing && (!blob.overwrite || existing.kind === "dir")) {
     await discard();
     throw nameTaken();
   }
@@ -199,8 +226,10 @@ export const projectUploads = new Hono<AppEnv>();
 
 projectUploads.post("/", async (c) => {
   const p = await loadProject(c, c.req.param("pid")!, "editor");
-  const req = uploadRequest(await body(c));
-  return c.json(await startUpload(c, p, { ...req, uploaderId: c.get("user")!.id, viaInbox: false }), 201);
+  const b = await body(c);
+  const req = uploadRequest(b);
+  const parentId = await requireDir(c.env.DB, p.id, b.parent_id);
+  return c.json(await startUpload(c, p, { ...req, parentId, uploaderId: c.get("user")!.id, viaInbox: false }), 201);
 });
 
 // Mounted at /api/uploads
@@ -215,7 +244,7 @@ uploads.post("/:id/complete", async (c) => {
   const { blob, project } = await loadBlob(c, c.req.param("id"), "editor", "pending");
   const given = ((await c.req.json().catch(() => ({}))) as { parts?: unknown }).parts;
   await finishUpload(c, blob, project, given);
-  return c.json(toBlob((await loadBlob(c, blob.id, "viewer")).blob));
+  return c.json(await withPath(c.env.DB, (await loadBlob(c, blob.id, "viewer")).blob));
 });
 
 uploads.delete("/:id", async (c) => {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Banner, Button, ClipboardText, Input, Radio, Select, Switch } from "@cloudflare/kumo";
 import { ArrowsClockwiseIcon, KeyIcon } from "@phosphor-icons/react";
-import { api, type Share, type ShareMode } from "@/api";
+import { api, type BlobKind, type Share, type ShareMode } from "@/api";
 import { useT } from "@/i18n";
 import { GiB, randomPassword } from "@/lib/format";
 import { FormDialog } from "./Dialogs";
@@ -22,8 +22,8 @@ export function ShareDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   project: { id: string; name: string };
-  /** Share this file; without it the whole project (download link or inbox). */
-  blob?: { id: string; name: string } | null;
+  /** Share this file or folder; without it the whole project. Folders and projects can be inboxes. */
+  blob?: { id: string; name: string; kind?: BlobKind } | null;
   onCreated?: (s: Share) => void;
 }) {
   const t = useT();
@@ -49,7 +49,8 @@ export function ShareDialog({
     }
   }, [open]);
 
-  const upload = !blob && mode === "upload";
+  const isFile = !!blob && blob.kind !== "dir";
+  const upload = !isFile && mode === "upload";
   const target = blob?.name ?? project.name;
 
   if (created) {
@@ -110,12 +111,13 @@ export function ShareDialog({
         onCreated?.(share);
       }}
     >
-      {blob ? (
+      {blob && (
         <div className="flex flex-col gap-1 rounded-lg bg-kumo-recessed px-4 py-3">
           <span className="text-xs text-kumo-subtle">{t("share.target")}</span>
           <span className="truncate font-medium">{blob.name}</span>
         </div>
-      ) : (
+      )}
+      {!isFile && (
         <Radio.Group
           legend={t("share.mode")}
           appearance="card"

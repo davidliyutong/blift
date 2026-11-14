@@ -4,7 +4,9 @@ import type {
   ApiKey,
   AdminUser,
   Blob,
+  BlobPage,
   CliLoginRequest,
+  DavPassword,
   Info,
   Member,
   Project,
@@ -51,6 +53,11 @@ export const api = {
     apiKeys: () => http.get<{ api_keys: ApiKey[] }>("/api/auth/api-keys"),
     createApiKey: (body: { name: string; max_uses?: number | null; expires_in?: number | null; session_ttl?: number | null }) =>
       http.post<ApiKey & { key: string }>("/api/auth/api-keys", body),
+    davPasswords: () => http.get<{ dav_passwords: DavPassword[] }>("/api/auth/dav-passwords"),
+    /** Without `password` the server generates one and returns it, this once. */
+    createDavPassword: (body: { name: string; password?: string; project_id?: string; readonly?: boolean }) =>
+      http.post<DavPassword & { username: string; password?: string }>("/api/auth/dav-passwords", body),
+    deleteDavPassword: (id: string) => http.del(`/api/auth/dav-passwords/${enc(id)}`),
     deleteApiKey: (id: string, revokeSessions: boolean) =>
       http.del(`/api/auth/api-keys/${enc(id)}${qs({ revoke_sessions: revokeSessions ? 1 : undefined })}`),
   },
@@ -69,7 +76,7 @@ export const api = {
     create: (body: { name: string; description?: string; storage_id?: string }) =>
       http.post<Project>("/api/projects", body),
     get: (id: string) => http.get<Project>(`/api/projects/${enc(id)}`),
-    update: (id: string, body: { name?: string; description?: string }) =>
+    update: (id: string, body: { name?: string; description?: string; webdav_enabled?: boolean }) =>
       http.patch<Project>(`/api/projects/${enc(id)}`, body),
     remove: (id: string) => http.del(`/api/projects/${enc(id)}`),
     members: (id: string) => http.get<{ members: Member[] }>(`/api/projects/${enc(id)}/members`),
@@ -81,11 +88,40 @@ export const api = {
   },
 
   blobs: {
+    /**
+     * With `path` ("/" for the root: an empty value is not sent) or `parent_id`: one directory
+     * (directories first, pages with `cursor`). Without:
+     * all files of the project at every level (search; pages with `offset`, has `total`).
+     */
     list: (
       projectId: string,
-      p: { q?: string; sort?: "name" | "size" | "created_at"; order?: "asc" | "desc"; limit?: number; offset?: number },
-    ) => http.get<{ blobs: Blob[]; total: number }>(`/api/projects/${enc(projectId)}/blobs${qs(p)}`),
+      p: {
+        path?: string;
+        parent_id?: string;
+        q?: string;
+        sort?: "name" | "size" | "created_at";
+        order?: "asc" | "desc";
+        limit?: number;
+        offset?: number;
+        cursor?: string;
+      },
+    ) => http.get<BlobPage>(`/api/projects/${enc(projectId)}/blobs${qs(p)}`),
     rename: (id: string, name: string) => http.patch<Blob>(`/api/blobs/${enc(id)}`, { name }),
+    /** mkdir: `path` below the directory `parent_id` (null = root); `parents` works like mkdir -p. */
+    mkdir: (projectId: string, body: { path: string; parent_id?: string | null; parents?: boolean }) =>
+      http.post<Blob>(`/api/projects/${enc(projectId)}/dirs`, body),
+    /** Moves into a directory (null = root) in requests of ≤ 100 ids, one after another. */
+    move: async (projectId: string, ids: string[], parentId: string | null) => {
+      let moved = 0;
+      for (let i = 0; i < ids.length; i += 100) {
+        const r = await http.post<{ moved: number }>(`/api/projects/${enc(projectId)}/blobs/move`, {
+          ids: ids.slice(i, i + 100),
+          parent_id: parentId,
+        });
+        moved += r.moved;
+      }
+      return { moved };
+    },
     remove: (id: string) => http.del(`/api/blobs/${enc(id)}`),
     /** Deletes in requests of ≤ 100 ids, one after another (the server's per-request limit). */
     bulkDelete: async (projectId: string, ids: string[]) => {
@@ -102,7 +138,10 @@ export const api = {
   },
 
   uploads: {
-    init: (projectId: string, body: { name: string; size: number; content_type?: string; overwrite?: boolean }) =>
+    init: (
+      projectId: string,
+      body: { name: string; size: number; content_type?: string; overwrite?: boolean; parent_id?: string | null },
+    ) =>
       http.post<UploadInit>(`/api/projects/${enc(projectId)}/uploads`, body),
     parts: (blobId: string, part_numbers: number[]) =>
       http.post<{ urls: Record<string, string>; expires_at: number }>(`/api/uploads/${enc(blobId)}/parts`, {
@@ -128,7 +167,7 @@ export const api = {
   },
 
   public: {
-    share: (token: string, access?: string, page: { cursor?: string; limit?: number } = {}) =>
+    share: (token: string, access?: string, page: { parent_id?: string; cursor?: string; limit?: number } = {}) =>
       http.get<PublicShareInfo>(`/api/public/shares/${enc(token)}${qs(page)}`, {
         headers: access ? { "X-Share-Access": access } : undefined,
       }),

@@ -13,6 +13,7 @@ import { pool } from "../lib/http";
 import { day } from "./stats";
 import { getSettings } from "./settings";
 import { storageFor } from "./storage";
+import { drainDeletedDirs } from "./tree";
 
 /** Rows per write statement. */
 export const WRITE_BATCH = 100;
@@ -35,6 +36,7 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
   const result = {
     stale_uploads: 0,
     blobs_released: 0,
+    dirs_drained: 0,
     objects_deleted: 0,
     uploads_aborted: 0,
     projects_purged: 0,
@@ -94,6 +96,11 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
       if (sql.startsWith("UPDATE")) result.blobs_released += n;
     }
   }
+
+  // 2b. Deleted directories: release what they held, remove the rows of empty ones.
+  result.dirs_drained = await drainDeletedDirs(db, Math.min(rows, share(0.3)));
+  rows -= result.dirs_drained;
+  if (result.dirs_drained >= share(0.3)) result.more = true;
 
   // 3. Expired credentials / links and old stats.
   const expire = share(0.1);
@@ -189,7 +196,7 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
       db.prepare(
         `UPDATE projects SET
            used_bytes = (SELECT COALESCE(SUM(size), 0) FROM blobs WHERE project_id = projects.id AND status = 'active'),
-           blob_count = (SELECT COUNT(*) FROM blobs WHERE project_id = projects.id AND status = 'active')
+           blob_count = (SELECT COUNT(*) FROM blobs WHERE project_id = projects.id AND status = 'active' AND kind = 'file')
          WHERE status = 'active'`,
       ),
       db.prepare(

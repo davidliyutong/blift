@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -125,5 +128,93 @@ func TestLangFromArgs(t *testing.T) {
 	if langFromArgs([]string{"ls", "--lang", "zh", "p"}) != "zh" || langFromArgs([]string{"--lang=en"}) != "en" ||
 		langFromArgs([]string{"ls", "--", "--lang", "zh"}) != "" {
 		t.Error("langFromArgs")
+	}
+}
+
+func TestRefs(t *testing.T) {
+	for arg, want := range map[string]ref{
+		"demo":               {project: "demo", slash: true},
+		"demo:":              {project: "demo", slash: true},
+		"demo:docs/a.pdf":    {project: "demo", path: "docs/a.pdf"},
+		"demo:/docs//2026/":  {project: "demo", path: "docs/2026", slash: true},
+		"alice/demo:a b.txt": {project: "alice/demo", path: "a b.txt"},
+	} {
+		if got := parseRef(arg); got != want {
+			t.Errorf("parseRef(%q) = %+v, want %+v", arg, got, want)
+		}
+	}
+	for arg, want := range map[string]bool{
+		"demo:": true, "demo:a/b": true, "alice/demo:x": true, "my-proj.v2:": true,
+		"demo": false, "./a:b": false, "/tmp/x:y": false, "a/b/c:d": false, "C:\\x": true, ".hidden:x": false,
+	} {
+		if isRemote(arg) != want {
+			t.Errorf("isRemote(%q) = %v, want %v", arg, !want, want)
+		}
+	}
+	// The older form: a project, then paths from its root.
+	got := refsOf([]string{"demo", "a.txt", "docs/b.txt", "docs/"})
+	want := []ref{{project: "demo", path: "a.txt"}, {project: "demo", path: "docs/b.txt"}, {project: "demo", path: "docs", slash: true}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("refsOf (older form) = %+v", got)
+	}
+	if got := refsOf([]string{"demo:a", "demo:b"}); len(got) != 2 || got[1] != (ref{project: "demo", path: "b"}) {
+		t.Errorf("refsOf = %+v", got)
+	}
+	if baseOf("a/b/c") != "c" || dirOf("a/b/c") != "a/b" || dirOf("c") != "" {
+		t.Error("baseOf / dirOf")
+	}
+}
+
+func TestLocalTreeAndDestPath(t *testing.T) {
+	i18n.SetLang("en")
+	root := t.TempDir()
+	src := filepath.Join(root, "photos")
+	for _, d := range []string{"2026", "empty"} {
+		if err := os.MkdirAll(filepath.Join(src, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"a.txt", "2026/b.txt"} {
+		if err := os.WriteFile(filepath.Join(src, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, err := localTree(src, false); err == nil || !strings.Contains(err.Error(), "use -r") {
+		t.Errorf("directory without -r: %v", err)
+	}
+	where := func(files []upFile) string {
+		var out []string
+		for _, f := range files {
+			out = append(out, cleanRemote(f.dir+"/"+f.name))
+		}
+		sort.Strings(out)
+		return strings.Join(out, " ")
+	}
+	// A directory keeps its name; with a trailing slash only its contents are meant.
+	files, dirs, _, err := localTree(src, true)
+	sort.Strings(dirs)
+	if err != nil || where(files) != "photos/2026/b.txt photos/a.txt" || strings.Join(dirs, " ") != "photos photos/2026 photos/empty" {
+		t.Errorf("localTree = %q, %q, %v", where(files), dirs, err)
+	}
+	files, dirs, _, err = localTree(src+"/", true)
+	sort.Strings(dirs)
+	if err != nil || where(files) != "2026/b.txt a.txt" || strings.Join(dirs, " ") != "2026 empty" {
+		t.Errorf("localTree (contents) = %q, %q, %v", where(files), dirs, err)
+	}
+
+	out := filepath.Join(root, "out")
+	if got, err := destPath(out, "docs/2026/a.pdf", true); err != nil || got != filepath.Join(out, "docs", "2026", "a.pdf") {
+		t.Errorf("destPath = %q, %v", got, err)
+	}
+	if st, err := os.Stat(filepath.Join(out, "docs", "2026")); err != nil || !st.IsDir() {
+		t.Errorf("destPath did not create the directories: %v", err)
+	}
+	if got, err := destPath(filepath.Join(root, "renamed.pdf"), "a.pdf", false); err != nil || got != filepath.Join(root, "renamed.pdf") {
+		t.Errorf("destPath (file name) = %q, %v", got, err)
+	}
+	for _, bad := range []string{"../x", "a/../../x", "a//b", "a\\b", ""} {
+		if _, err := destPath(out, bad, true); err == nil {
+			t.Errorf("destPath accepted %q", bad)
+		}
 	}
 }

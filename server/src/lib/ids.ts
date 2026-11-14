@@ -24,6 +24,9 @@ export const newId = () => randomString(16, B32);
 export const newToken = () => `blift_${randomString(32)}`;
 /** API key for `blift login --api-key` (only its SHA-256 is stored). */
 export const newApiKey = () => `bliftk_${randomString(32)}`;
+/** Generated WebDAV password (only its SHA-256 is stored). */
+export const DAV_PASSWORD_PREFIX = "bliftd_";
+export const newDavPassword = () => `${DAV_PASSWORD_PREFIX}${randomString(24)}`;
 /** Public share slug (/s/<token>). */
 export const newShareToken = () => randomString(12);
 /** CLI device-flow code, e.g. WDJB-MJHT. */

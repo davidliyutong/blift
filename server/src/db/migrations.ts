@@ -220,6 +220,47 @@ DROP INDEX projects_inbox;
 ALTER TABLE projects DROP COLUMN inbox_token;
 `,
   },
+  {
+    // Directories: a row of kind 'dir' in blobs (no object in storage), and every row names its
+    // directory in parent_id ('' = the project's root). Names are unique within a directory,
+    // files and directories alike, so moving or renaming a directory is one row. Each sort has an
+    // index per directory (directories first: 'dir' < 'file'); the 0002 indexes keep serving the
+    // listing of all files of a project. blobs_gc_dirs is the queue of deleted directories.
+    name: "0007_directories",
+    sql: `
+ALTER TABLE blobs ADD COLUMN parent_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE blobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'file';
+DROP INDEX blobs_project_name;
+CREATE UNIQUE INDEX blobs_project_name ON blobs(project_id, parent_id, name) WHERE status = 'active';
+CREATE INDEX blobs_dir_name ON blobs(project_id, parent_id, kind, name COLLATE NOCASE, id) WHERE status = 'active';
+CREATE INDEX blobs_dir_created ON blobs(project_id, parent_id, kind, created_at, id) WHERE status = 'active';
+CREATE INDEX blobs_dir_size ON blobs(project_id, parent_id, kind, size, id) WHERE status = 'active';
+CREATE INDEX blobs_gc_dirs ON blobs(updated_at) WHERE status = 'deleted' AND kind = 'dir';
+`,
+  },
+  {
+    // WebDAV: a project answers at /dav/<owner>/<project>/ once its owner turns it on. Clients
+    // sign in with the username and a WebDAV password, never the account password. A generated
+    // password is random, so only its SHA-256 is kept (one lookup per request); one the user
+    // chose is hashed like an account password.
+    name: "0008_webdav",
+    sql: `
+ALTER TABLE projects ADD COLUMN webdav_enabled INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE dav_passwords (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  secret_hash TEXT NOT NULL,
+  generated INTEGER NOT NULL,
+  project_id TEXT,
+  readonly INTEGER NOT NULL DEFAULT 0,
+  last_used_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX dav_passwords_user ON dav_passwords(user_id);
+CREATE INDEX dav_passwords_hash ON dav_passwords(secret_hash);
+`,
+  },
 ];
 
 const split = (sql: string) =>

@@ -22,7 +22,10 @@ and bookkeeping.
 
 ## Features
 
-- **Flat by design.** Projects contain files, nothing more: no folder trees to manage.
+- **Projects and folders.** A project holds files in folders, up to 16 levels deep. Moving or
+  renaming a folder is instant however much it holds, and a folder can be shared like a file.
+- **WebDAV.** Turn it on per project and point Zotero, OmniFocus or a file manager at
+  `/dav/<owner>/<project>/`, signing in with a WebDAV password instead of your account password.
 - **Direct transfers.** Presigned single `PUT` up to 64 MiB, parallel multipart uploads above
   that (each part retried on its own), parallel ranged downloads in the CLI.
 - **Any S3-compatible storage.** Several backends side by side, chosen per project (an optional
@@ -122,6 +125,14 @@ To deploy automatically from GitHub, connect the repository under the Worker's S
 variables `CF_D1_ID` (the D1 database id) plus, optionally, `CF_DOMAIN` (custom domain) and
 `PUBLIC_URL`. `make cf-config` writes `server/wrangler.local.toml` from the template on every
 build, so template changes are picked up without manual edits.
+
+Builds of other branches (pull requests) can deploy a
+[Worker Preview](https://developers.cloudflare.com/workers/previews/): set the non-production
+deploy command to `make preview` and the build variable `CF_PREVIEW_D1_ID` to a **separate** D1
+database (`wrangler d1 create blift-preview`). A preview applies its branch's migrations, so it
+must never share the production database; it also needs its own `APP_SECRET`
+(`wrangler preview secret`) and has no cron trigger, so no GC runs. Without previews, turn
+non-production branch builds off in the Worker's Builds settings.
 
 ### Local development
 

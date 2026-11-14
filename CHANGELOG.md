@@ -8,12 +8,54 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- Folders in the web UI: browse a project folder by folder (breadcrumbs, folders first), create
+  folders, upload a folder (picker or drag and drop; its structure is kept), move files and
+  folders, share a folder as a download link or an inbox, and browse shared folders on the share
+  page. Search still covers the whole project and shows where each file is.
+- `make preview` deploys a Worker Preview of the current branch, and `make cf-config` writes the
+  `previews` block it needs when `CF_PREVIEW_D1_ID` (a database of its own) is set.
+- **WebDAV.** A project's owner can turn WebDAV on in its settings; the project is then at
+  `/dav/<owner>/<project>/` for Zotero, OmniFocus, file managers and other WebDAV clients. They
+  sign in with the username and a WebDAV password from Account → WebDAV passwords (generated or
+  your own, optionally limited to one project or to reading), never the account password.
+  Supports PROPFIND, GET with ranges, PUT, DELETE, MKCOL, MOVE and COPY. LOCK and UNLOCK are
+  accepted so that Finder, Windows and Office can write, but nothing is actually locked: when
+  two people save the same file, the last one wins.
+  Files uploaded this way pass through the server: on Cloudflare Workers they are limited to
+  100 MB each. Deployments on Workers need `/dav` and `/dav/*` in `run_worker_first` (see
+  `server/wrangler.toml`; `make cf-config` writes it).
+- `blift browse [project[:path]]`: a full-screen browser with the server on one side and this
+  machine on the other (three columns, vim keys). Yank on one side and paste on the other to
+  upload or download, folders included; cut and paste on the server moves. `?` lists the keys.
+- Folders in the CLI. Places are written `project:path` (`demo:docs/a.pdf`), as with scp and
+  rclone. New commands: `blift cp` (uploads and downloads, `-r` for whole trees, `-P` files at
+  a time), `mkdir [-p]`, `tree`, `stat` and `cat`. `ls` lists a folder (`-r` for everything
+  below, no arguments for your projects), `mv` moves as well as renames, `rm -r` deletes
+  folders, `share create demo:docs` shares a folder and `share get` downloads one with its
+  structure. Shell completion follows paths a folder at a time. The older `<project> <name>`
+  forms keep working.
+- **Directories** (server and API). A project is now a tree, up to
+  16 levels deep: `POST /api/projects/:id/dirs` (like `mkdir`, or `mkdir -p` with `parents`),
+  uploads take a `parent_id`, `GET …/blobs?path=` / `?parent_id=` lists one directory
+  (directories first) and `GET …/stat?path=` resolves a path. `PATCH /api/blobs/:id` moves as
+  well as renames, `POST …/blobs/move` moves up to 100 at once, and deleting a directory deletes
+  everything below it. Renaming or moving a directory is instant however much it holds. Every
+  `Blob` has `kind`, `parent_id` and `path`; without `path` / `parent_id` the listing still
+  returns all files of the project.
+- Share links for a directory: a download link is browsed a directory at a time and serves
+  `/s/<token>/<path>` to wget and curl; an inbox link can take files into a directory. Project
+  shares show directories too.
 - `make cf-config` writes `server/wrangler.local.toml` from the template and the environment
   (`CF_D1_ID`, `CF_DOMAIN`, `PUBLIC_URL`), so Cloudflare Workers Builds can deploy from GitHub.
 - `blift share put <inbox link> <file>...` uploads through an inbox link without signing in
   (`--password` for a protected link, `--name`, `-j`); it stops once the link is used up.
 
 ### Changed
+
+- `blift upload <project> <dir>` no longer uploads the files directly inside a directory: it asks
+  for `-r` and then uploads the whole tree. `blift ls <project>` lists the project's top folder
+  rather than every file (`-r` does that), and several files are transferred at a time, sharing
+  one progress bar.
 
 - **Breaking:** the project inbox is now a kind of share link. "Create share link" offers Download
   or Inbox; an inbox link (`/s/<token>`) can have a password, an expiry and limits on the number of

@@ -34,7 +34,7 @@ and the CLI (`cli/`). Change it together with the code.
 | `invalid_password` | 403 | wrong share password |
 | `not_found` | 404 | resource not found (or not visible) |
 | `conflict` | 409 | generic conflict |
-| `name_taken` | 409 | a project/blob with that name already exists |
+| `name_taken` | 409 | a project with that name exists, or a file or directory with that name in the same directory |
 | `setup_done` | 409 | bootstrap already completed |
 | `share_expired` | 410 | share expired |
 | `share_exhausted` | 410 | share reached its download limit, or an upload link its file or size limit |
@@ -71,12 +71,19 @@ type Project = {
   storage_id: string; storage_name: string;
   storage_location: string;              // the backend's location label ("" when not set)
   used_bytes: number; blob_count: number;
+  webdav_enabled: boolean;               // see "WebDAV"
+  webdav_url: string;                    // <public origin>/dav/<owner>/<project>/
   created_at: number; updated_at: number;
 };
 
-type Blob = {
-  id: string; project_id: string; name: string; size: number;
-  content_type: string;                  // "application/octet-stream" if unknown
+type Blob = {                            // a file, or a directory (see "Directories")
+  id: string; project_id: string;
+  kind: "file" | "dir";
+  parent_id: string | null;              // the directory it is in; null = the project's root
+  name: string;
+  path: string;                          // its path in the project: "docs/2026/a.pdf"
+  size: number;                          // 0 for directories
+  content_type: string;                  // "application/octet-stream" if unknown, "inode/directory"
   uploader: UserRef | null;
   via_inbox: boolean;                    // uploaded anonymously through an upload link
   download_count: number;
@@ -87,7 +94,8 @@ type Share = {
   id: string; token: string; url: string;        // url = <public origin>/s/<token>
   mode: "download" | "upload";   // upload = an inbox: anyone with the link can add files (see "Upload links")
   project_id: string; project_name: string;
-  blob_id: string | null; blob_name: string | null;  // null = whole project (always for upload links)
+  blob_id: string | null; blob_name: string | null;  // the shared file or directory; null = whole project
+  blob_kind: "file" | "dir" | null; blob_path: string | null;  // … and its kind and path in the project
   download_url: string | null;   // <public origin>/s/<token>/<file name, URL-encoded>; single-file shares
                                  // only: a direct link for wget/curl (see "Share links for wget and curl")
   has_password: boolean;
@@ -102,8 +110,10 @@ type Share = {
 
 Naming rules:
 - Project name: `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, unique per owner.
-- Blob name: 1–255 chars, no `/`, `\`, control chars, not `.`/`..`; unique per project.
-  The structure is deliberately flat: **project → blob**, no folders.
+- Blob name (files and directories): 1–255 chars, no `/`, `\`, control chars, not `.`/`..`;
+  unique within its directory, case-sensitively, files and directories alike.
+- Path: names joined by `/`, relative to the project's root (`docs/2026/a.pdf`; leading and
+  trailing slashes are ignored; `""` or `/` is the root). Directories nest at most 16 levels deep.
 
 ## Meta
 
@@ -141,6 +151,9 @@ Errors: `setup_done`, `invalid_secret`, `not_configured` (server has no `BOOTSTR
 | GET | `/api/auth/api-keys` | – | `{api_keys: ApiKey[]}` |
 | POST | `/api/auth/api-keys` | `{name, max_uses?, expires_in?, session_ttl?}` | `ApiKey & {key}` (201) |
 | DELETE | `/api/auth/api-keys/:id?revoke_sessions=1` | – | 204 |
+| GET | `/api/auth/dav-passwords` | – | `{dav_passwords: DavPassword[]}` |
+| POST | `/api/auth/dav-passwords` | `{name, password?, project_id?, readonly?}` | `DavPassword & {username, password?}` (201) |
+| DELETE | `/api/auth/dav-passwords/:id` | – | 204 |
 
 A session whose user has TOTP enabled starts in *pending MFA* state (both local password
 login and OIDC login). While pending, every endpoint except `/api/auth/mfa`, `/api/auth/me`
@@ -232,7 +245,7 @@ set), shown when users pick the backend of a new project (`storage_id` in `POST 
 | GET | `/api/projects` | – | `{projects: Project[]}` (all projects the caller is a member of) |
 | POST | `/api/projects` | `{name, description?, storage_id?}` | `Project` (201) |
 | GET | `/api/projects/:id` | – | `Project` |
-| PATCH | `/api/projects/:id` | `{name?, description?}` | `Project` (owner) |
+| PATCH | `/api/projects/:id` | `{name?, description?, webdav_enabled?}` | `Project` (owner) |
 | DELETE | `/api/projects/:id` | – | 204 (owner or admin; objects are removed asynchronously by GC) |
 | GET | `/api/projects/:id/members` | – | `{members: [{user: UserRef & {email}, role, created_at}]}` |
 | POST | `/api/projects/:id/members` | `{user: "<username or email>", role: "editor"\|"viewer"}` | member (owner) |
@@ -247,38 +260,74 @@ Roles: `viewer` = list + download; `editor` = + upload, rename, delete blobs, cr
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `/api/projects/:id/blobs?q=&prefix=&name=&sort=name\|size\|created_at&order=asc\|desc&limit=100&cursor=` | – | `{blobs: Blob[], total?, next_cursor}` (see below) |
+| GET | `/api/projects/:id/blobs?parent_id=&path=&q=&prefix=&name=&sort=name\|size\|created_at&order=asc\|desc&limit=100&cursor=` | – | `{dir?, blobs: Blob[], total?, next_cursor}` (see below) |
+| GET | `/api/projects/:id/stat?path=` | – | `Blob` at that path (file or directory) |
+| POST | `/api/projects/:id/dirs` | `{path, parent_id?, parents?}` | `Blob` (201, or 200 when it existed; editor) |
 | GET | `/api/blobs/:id` | – | `Blob` |
-| PATCH | `/api/blobs/:id` | `{name}` | `Blob` (editor) |
+| PATCH | `/api/blobs/:id` | `{name?, parent_id?}` | `Blob` (editor): rename and/or move |
 | DELETE | `/api/blobs/:id` | – | 204 (editor) |
 | POST | `/api/projects/:id/blobs/delete` | `{ids: string[]}` (≤ 100; send more in several requests) | `{deleted: n}` |
+| POST | `/api/projects/:id/blobs/move` | `{ids: string[], parent_id}` (≤ 100) | `{moved: n}` |
 | GET | `/api/blobs/:id/download?redirect=1&inline=1` | – | `{url, expires_at}` or `302` to `url` when `redirect=1` |
 
 `url` is a presigned S3 GET (valid 1 h) that sets `Content-Disposition` to the blob name
 (`inline` when `inline=1`). Clients download **directly from S3**.
 
-**Listing** (`GET /api/projects/:id/blobs`) is cheap at any project size: every sort is served in
-index order and pages continue with a cursor.
+### Directories
+
+A project is a tree: a directory is a `Blob` with `kind: "dir"`, and every blob names its directory
+in `parent_id`. A directory has no object in storage and does not count in `Project.blob_count`.
+Paths are never stored, so renaming or moving a directory is one write however much it holds.
+
+- **Create**: `POST /api/projects/:id/dirs` with `path` relative to the directory `parent_id`
+  (default: the root). All but the last name must exist (else `404 not_found`) and the last must
+  be free (else `409 name_taken`). With `parents: true` it works like `mkdir -p`: missing
+  directories are created and an existing directory is returned (`200`). `name_taken` also when a
+  file is in the way; `bad_request` beyond 16 levels.
+- **Rename / move**: `PATCH /api/blobs/:id` with `name` and/or `parent_id` (`null` = the root), or
+  `POST …/blobs/move` for up to 100 blobs into one directory (all or nothing). Blobs stay in their
+  project. `name_taken` when the target directory has that name; `bad_request` when a directory
+  would move into itself or below, or deeper than 16 levels; `not_found` for an unknown directory.
+- **Delete** (`DELETE /api/blobs/:id`, `…/blobs/delete`): a directory goes with everything below
+  it. It disappears at once; its files are released (usage, share links) in the request for a
+  small directory and within a GC run or so for a large one. Until then they may still show up in
+  the listing of all files.
+- **Download**: files only (`400 bad_request` for a directory).
+
+**Listing** (`GET /api/projects/:id/blobs`) has two forms:
+- **One directory**: with `parent_id=<directory id>` or `path=<path>` (`path=` or `path=/` is the
+  root). Its directories come first, then its files, each in the requested sort. The response has
+  `dir: {id, path, parents: [{id, name}]}` (`id: null` and `path: ""` for the root; `parents` from
+  the top down, for breadcrumbs), no `total`, and pages with `cursor` only. Unknown directory →
+  `404 not_found`.
+- **All files** of the project, at every level and without directories: with neither parameter.
+  Each blob's `path` tells where it is. This is the form for searching (`q`) and for walking a
+  whole project.
+
+Both are cheap at any size: every sort is served in index order and pages continue with a cursor.
 - `limit` 1–1000 (default 100). `sort` defaults to `created_at`, `order` to `desc`; names sort
   case-insensitively.
 - `next_cursor` is set when more rows follow; pass it back as `cursor` with the same `sort`
   and `order` (another sort → `400 bad_request`). `offset` still works for numbered pages
   (not together with `cursor`) but costs more the deeper it goes.
-- `total`, the number of matching blobs, is only returned when `cursor` is absent.
-- Filters: `q` (name contains, case-insensitive), `prefix` (name starts with,
-  case-insensitive; used for shell completion), `name` (exact name, repeatable, ≤ 50; the
-  CLI resolves file arguments with it).
+- `total`, the number of matching files, is only returned by the all-files form when `cursor` is
+  absent.
+- Filters, on names (not paths), within the directory or over all files: `q` (name contains,
+  case-insensitive), `prefix` (name starts with, case-insensitive; used for shell completion),
+  `name` (exact name, repeatable, ≤ 50).
 
 ## Uploads (direct to S3 via presigned URLs)
 
 1. **Init** `POST /api/projects/:id/uploads`
-   body `{ "name": "a.iso", "size": 123, "content_type": "application/x-iso9660-image", "overwrite": false }`
+   body `{ "name": "a.iso", "size": 123, "content_type": "application/x-iso9660-image", "overwrite": false, "parent_id": null }`
    ```json
    { "blob_id": "…", "mode": "single", "url": "https://s3…", "expires_at": 0 }
    { "blob_id": "…", "mode": "multipart", "part_size": 16777216, "part_count": 12, "expires_at": 0 }
    ```
-   The server picks the mode: `single` when `size <= 64 MiB`, else `multipart`.
-   Errors: `name_taken` (when the name exists and `overwrite` is false), `quota_exceeded`.
+   The server picks the mode: `single` when `size <= 64 MiB`, else `multipart`. `parent_id` is the
+   directory the file goes into (omitted or `null` = the root); create it first (`POST …/dirs`).
+   Errors: `name_taken` (when the name exists in that directory and `overwrite` is false, or it is
+   a directory's), `not_found` (unknown directory), `quota_exceeded`.
 2. **Transfer**
    - single: `PUT <url>` with the raw body (optionally `Content-Type`).
    - multipart: get part URLs in batches with `POST /api/uploads/:blob_id/parts`
@@ -302,59 +351,68 @@ Presigned URLs are valid for 6 hours.
 | DELETE | `/api/shares/:id` | – | 204 (creator, project owner or admin) |
 
 `mode` is `"download"` (default) or `"upload"`. `expires_in` is seconds from now (omit/null =
-never). `blob_id` omitted = share the whole project; upload links always cover the whole project
-(`blob_id` is refused). `max_downloads` applies to download links, `max_uploads` (files) and
+never). `blob_id` is a file or a directory (with everything below it); omitted = the whole
+project. An upload link takes files into a directory or the project's root (`blob_id` of a file
+is refused). `max_downloads` applies to download links, `max_uploads` (files) and
 `max_upload_bytes` (total size) to upload links; omit/null = no limit.
 
 ## Public share access (no login)
 
 | Method | Path | Response |
 | --- | --- | --- |
-| GET | `/api/public/shares/:token?limit=5000&cursor=` | see below |
+| GET | `/api/public/shares/:token?parent_id=&limit=5000&cursor=` | see below |
 | POST | `/api/public/shares/:token/unlock` body `{password}` | `{access_token}` + cookie |
 | GET | `/api/public/shares/:token/blobs/:blob_id/download?redirect=1` | `{url, expires_at}` or 302 |
 
 ```json
-{ "share": { "token": "…", "mode": "download", "kind": "blob" | "project", "name": "file or project name",
+{ "share": { "token": "…", "mode": "download", "kind": "blob" | "dir" | "project", "name": "file, directory or project name",
              "has_password": true, "locked": false, "expires_at": null,
              "max_downloads": null, "download_count": 3, "creator": "Alice", "created_at": 0,
              "file_count": 12000, "total_bytes": 123456789 },
-  "blobs": [ { "id", "name", "size", "content_type", "created_at" } ],
+  "dir": { "id": null, "path": "", "parents": [] },
+  "blobs": [ { "id", "kind", "name", "path", "size", "content_type", "created_at" } ],
   "next_cursor": "…" }
 ```
-An upload link (`"mode": "upload"`, `"kind": "project"`) describes the project and its limits
-instead and never lists files: `{share: {token, mode, kind, name, description, has_password,
+An upload link (`"mode": "upload"`, `"kind": "project"` or `"dir"`) describes where the files go
+and its limits instead and never lists files: `{share: {token, mode, kind, name, description, has_password,
 locked, expires_at, max_uploads, upload_count, max_upload_bytes, upload_bytes, creator,
-created_at}}`. `blobs` and `next_cursor` are omitted while `locked`. A project share lists its files by name,
-`limit` (1–5000, default 5000) at a time; `next_cursor` (else `null`) fetches the next page
-as `?cursor=`. `file_count` / `total_bytes` describe the whole share. For password-protected shares pass the access token with
+created_at}}` (`description` is the project's, `""` for a directory). `blobs`, `dir` and
+`next_cursor` are omitted while `locked`. A project or directory share is browsed one directory
+at a time: `parent_id` is a directory inside the share (default: the shared directory or the
+project's root; one outside the share → `404`), listed by name with directories first, `limit`
+(1–5000, default 5000) at a time; `next_cursor` (else `null`) fetches the next page as
+`?cursor=`. `dir` and each blob's `path` are relative to what is shared, and nothing above it is
+revealed. `file_count` / `total_bytes` describe the whole share (`null` for a directory share).
+`…/blobs/:blob_id/download` serves any file inside the share. For password-protected shares pass the access token with
 header `X-Share-Access: <token>` or query `?access_token=` (the unlock call also sets an
 HttpOnly cookie for browsers). Errors: `not_found`, `share_expired`, `share_exhausted`, `invalid_password`.
 
 ### Share links for wget and curl
 
-The share link `<public origin>/s/<token>` and the direct link `/s/<token>/<name>` are answered by
+The share link `<public origin>/s/<token>` and the direct link `/s/<token>/<path>` are answered by
 the API too: they are aliases of `GET /api/public/shares/:token/direct` and
-`GET /api/public/shares/:token/direct/:name`. File bytes still never pass through the server.
+`GET /api/public/shares/:token/direct/<path>`. `<path>` is the file's name for a single-file share,
+else its path below the shared directory or project (`/s/<token>/docs/a.pdf`). File bytes still
+never pass through the server.
 
 - **Browsers** get the web page at `/s/<token>` as before: requests whose `Accept` header contains
   `text/html`, and link previews of chat apps (a `User-Agent` containing `bot`, `preview`,
   `crawl`, …, so that previews do not use up downloads).
 - **Other clients** (wget, curl and scripts send `Accept: */*`) get the file:
-  - `/s/<token>` of a single-file share, or `/s/<token>/<name>` where `name` is the shared file's
-    name, or the name of a file of a shared project → `302` to a presigned S3 URL (valid 1 h,
+  - `/s/<token>` of a single-file share, or `/s/<token>/<path>` where `path` is the shared file's
+    name, or the path of a file in a shared directory or project → `302` to a presigned S3 URL (valid 1 h,
     `Content-Disposition` = the file name). It counts as a download exactly like
     `…/blobs/:blob_id/download` (and is refused once `max_downloads` is reached). Plain
     `wget <url>` names the file after the last segment of the URL it was given, which is why
     `Share.download_url` has the name in it; `curl -OJL` works with either form.
-  - `/s/<token>` of a project share → `200 text/plain`, one direct link
-    (`<public origin>/s/<token>/<name>`) per line for the first 1000 files by name, e.g. for
-    `wget -i`. Requests with `?access_token=` get it appended to every link.
+  - `/s/<token>` of a project or directory share → `200 text/plain`, one direct link
+    (`<public origin>/s/<token>/<path>`) per line for its first 1000 files (every level, upper
+    directories first, by name), e.g. for `wget -i`. Requests with `?access_token=` get it appended to every link.
   - `HEAD` answers `200` with the file's `Content-Length`, `Content-Type` and
     `Content-Disposition`, without counting a download or issuing a URL.
 - Upload links have nothing to download: `404` (`not_found`) with a hint to open the link in a
   browser.
-- `/s/<token>/<name>` downloads in browsers too; browsers (and link previews) that hit an error
+- `/s/<token>/<path>` downloads in browsers too; browsers (and link previews) that hit an error
   there are redirected to the share page `/s/<token>`, which shows it (or asks for the password).
 - Password-protected shares need an access token from `…/unlock`, as header
   `X-Share-Access: <token>` or query `?access_token=`; without one → `403`.
@@ -364,9 +422,9 @@ the API too: they are aliases of `GET /api/public/shares/:token/direct` and
 ## Upload links (anonymous uploads, no login)
 
 A share with `mode: "upload"` is an inbox: anyone with the link (and its password, if set) can
-upload into the project, until the link expires or reaches `max_uploads` files or
+upload into the project (or the directory the link was created for), until the link expires or reaches `max_uploads` files or
 `max_upload_bytes` bytes. The link is `Share.url` like any share; browsers get an upload page.
-Uploaders cannot list, download or replace anything. A name that is taken becomes `name (1).ext`,
+Uploaders cannot list, download, replace anything or create directories. A name that is taken becomes `name (1).ext`,
 `name (2).ext`, … when the upload completes. Usage, quota and traffic stats are charged to the
 project owner. Files show up with `uploader: null, via_inbox: true`.
 
@@ -385,6 +443,59 @@ that has started may finish after the link expires. A file counts towards the li
 completes. Errors: `not_found` (unknown link, not an upload link, or a wrong upload token),
 `invalid_password` (403, locked), `share_expired`, `share_exhausted` (a limit is used up),
 `upload_too_large` (the file is larger than the size left), `quota_exceeded` (owner's quota).
+
+## WebDAV
+
+A project whose owner sets `webdav_enabled` is a WebDAV collection at `Project.webdav_url`,
+`<public origin>/dav/<owner>/<project>/`; its directories and files follow by path
+(`…/dav/alice/papers/zotero/ABCD.zip`). `/dav/` lists the owners and `/dav/<owner>/` the projects
+the caller can reach. A project with WebDAV off answers `404`.
+
+**Sign-in** is HTTP Basic with the username and a **WebDAV password**, never the account password
+(no second factor is asked for; the user created the password while signed in):
+
+```ts
+type DavPassword = {
+  id: string; name: string;
+  generated: boolean;             // made by the server rather than chosen by the user
+  project_id: string | null;      // only this project; null = every project with WebDAV on
+  project_name: string | null;
+  readonly: boolean;              // cannot change anything
+  last_used_at: number | null; created_at: number;
+};
+```
+`POST /api/auth/dav-passwords` without `password` generates one (`bliftd_<24 base62 chars>`) and
+returns it in `password`, this once; only its SHA-256 is stored. With `password` (10–128
+characters) the user's own is stored hashed and not returned. At most 20 per user. What a
+password may do is what the user may do in the project (viewers read), less when it is
+`readonly` or limited to a project. Deleting one ends its access at once. Requests without valid
+credentials get `401` with `WWW-Authenticate: Basic`; `OPTIONS` needs none.
+
+**Protocol**: RFC 4918 (`DAV: 1, 2`). Locks are granted but **not enforced** (see `LOCK` below).
+
+| Method | Notes |
+| --- | --- |
+| `OPTIONS` | `200`, `DAV: 1`, `Allow` |
+| `PROPFIND` | `Depth: 0` or `1` (`infinity` → `403`); `207` with `displayname`, `resourcetype`, `getcontentlength`, `getcontenttype`, `getetag` (files), `getlastmodified`, `creationdate`, whatever the body asks for. Entries come by name; a directory of any size is streamed. |
+| `GET`, `HEAD` | The file, with `ETag`, `Last-Modified`, `Range` support, `If-Match` / `If-None-Match`. `404` when missing. |
+| `PUT` | `201` created, `204` replaced, with the new `ETag`. `409` when the parent does not exist, `405` on a directory, `412` for a failed `If-Match` / `If-None-Match: *`, `507` over quota. |
+| `DELETE` | `204`; a directory goes with everything in it (see "Directories"). |
+| `MKCOL` | `201` (exactly); `405` when the name exists, `409` without the parent. |
+| `MOVE`, `COPY` | `Destination` in the same project, `Overwrite: T` (default) or `F`. `201` created, `204` replaced, `412` when the destination exists and `Overwrite` is `F`, `409` without the destination's parent. A move is one write whatever a directory holds; a copy is one storage request per file and takes at most 25 files (`507` beyond). The entity tags of an `If` header are checked. |
+| `PROPPATCH` | Accepted (`207`), nothing is stored. |
+| `LOCK`, `UNLOCK` | Answered so that Finder, Windows and Office, which only write to a server with locks, can: `LOCK` returns `200` with a lock token (`201` and an empty file when the name was free; a refresh keeps its token), `UNLOCK` `204`. **Nothing is locked**: no request is ever refused for a lock, and when two clients write the same file the last one wins. `If-Match` still guards against replacing a version the client has not seen. |
+
+- A file's `ETag` is its blob id in quotes: every upload makes a new blob, so it is strong and
+  changes exactly when the content does. Directories have none; their `getlastmodified` changes
+  whenever something directly in them is added, replaced, moved or deleted.
+- **File bytes pass through the server here**, unlike everywhere else: a WebDAV client can only
+  talk to the URL it was given. Bodies are streamed. On Cloudflare Workers a request body is
+  limited to 100 MB (the platform answers `413`); the Node server has no limit below S3's 5 GiB
+  for one PUT. A `PUT` without `Content-Length` is accepted up to 16 MiB (`411` beyond).
+- Files written over WebDAV are ordinary blobs (`uploader` = the user); usage and stats count as
+  for any upload or download.
+- Built for, and tested against the request sequences of, Zotero's file sync and OmniFocus
+  (OmniDAV's conformance tests).
 
 ## Admin (role = admin)
 

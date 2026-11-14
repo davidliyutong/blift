@@ -10,9 +10,10 @@ import { body, int, isLinkPreview, publicOrigin, str, wantsPage } from "../lib/h
 import { newId, newShareToken } from "../lib/ids";
 import { signJwt, verifyJwt } from "../lib/jwt";
 import { contentDisposition } from "../lib/s3";
-import { BLOB_SELECT, listBlobs, loadProject, type BlobRow } from "../services/projects";
+import { BLOB_SELECT, listBlobs, loadProject, type BlobKind, type BlobRow } from "../services/projects";
 import { addStats } from "../services/stats";
 import { storageFor } from "../services/storage";
+import { chainOf, chainsOf, dirInfo, findPath, requireDir, splitPath, subtreeFiles } from "../services/tree";
 import { userRef } from "../services/users";
 import { DOWNLOAD_TTL } from "./blobs";
 import { abortUpload, finishUpload, partUrls, startUpload, UPLOAD_TTL, uploadRequest } from "./uploads";
@@ -44,6 +45,8 @@ type ShareRow = {
   project_used_bytes: number;
   blob_name: string | null;
   blob_size: number | null;
+  blob_kind: BlobKind | null;
+  blob_parent_id: string | null;
   creator_username: string | null;
   creator_display_name: string | null;
 };
@@ -51,7 +54,7 @@ type ShareRow = {
 const SHARE_SELECT = `
   SELECT s.*, p.name AS project_name, p.description AS project_description, p.storage_id AS project_storage_id,
          p.owner_id, p.blob_count AS project_blob_count, p.used_bytes AS project_used_bytes, o.status AS owner_status,
-         b.name AS blob_name, b.size AS blob_size,
+         b.name AS blob_name, b.size AS blob_size, b.kind AS blob_kind, b.parent_id AS blob_parent_id,
          u.username AS creator_username, u.display_name AS creator_display_name
   FROM shares s
   JOIN projects p ON p.id = s.project_id AND p.status = 'active'
@@ -59,8 +62,23 @@ const SHARE_SELECT = `
   LEFT JOIN blobs b ON b.id = s.blob_id
   LEFT JOIN users u ON u.id = s.creator_id`;
 
-/** A file's direct link (/s/<token>/<name>): `wget <link>` saves it under its own name. */
-export const directLink = (origin: string, token: string, name: string) => `${origin}/s/${token}/${encodeURIComponent(name)}`;
+/**
+ * A file's direct link (/s/<token>/<path>): `wget <link>` saves it under its own name. `path` is
+ * the file's name for a single-file share, else its path below the shared directory or project.
+ */
+export const directLink = (origin: string, token: string, path: string) =>
+  `${origin}/s/${token}/${path.split("/").map(encodeURIComponent).join("/")}`;
+
+const isFileShare = (s: ShareRow) => s.blob_kind === "file";
+/** The directory a share covers: '' = the project's root. Not for single-file shares. */
+const shareRoot = (s: ShareRow) => s.blob_id ?? "";
+
+/** API shape; `blob_path` needs the directories above each shared blob. */
+async function toShares(c: Ctx, rows: ShareRow[]) {
+  const chains = await chainsOf(c.env.DB, rows.map((s) => s.blob_parent_id ?? ""));
+  const path = (s: ShareRow) => [...(chains.get(s.blob_parent_id ?? "") ?? []).map((d) => d.name), s.blob_name].join("/");
+  return rows.map((s) => ({ ...toShare(c, s), blob_path: s.blob_id ? path(s) : null }));
+}
 
 const toShare = (c: Ctx, s: ShareRow) => ({
   id: s.id,
@@ -71,7 +89,8 @@ const toShare = (c: Ctx, s: ShareRow) => ({
   project_name: s.project_name,
   blob_id: s.blob_id,
   blob_name: s.blob_name,
-  download_url: s.blob_id && s.blob_name ? directLink(publicOrigin(c), s.token, s.blob_name) : null,
+  blob_kind: s.blob_kind,
+  download_url: isFileShare(s) && s.mode === "download" ? directLink(publicOrigin(c), s.token, s.blob_name!) : null,
   has_password: !!s.password_hash,
   expires_at: s.expires_at,
   max_downloads: s.max_downloads,
@@ -100,7 +119,7 @@ shares.get("/", async (c) => {
         u.id,
         u.id,
       );
-  return c.json({ shares: rows.map((s) => toShare(c, s)) });
+  return c.json({ shares: await toShares(c, rows) });
 });
 
 shares.post("/", async (c) => {
@@ -110,11 +129,16 @@ shares.post("/", async (c) => {
   const mode = b.mode ?? "download";
   if (mode !== "download" && mode !== "upload") throw badRequest('mode must be "download" or "upload"');
   const upload = mode === "upload";
-  if (upload && b.blob_id) throw badRequest("upload links cover a whole project");
   let blobId: string | null = null;
   if (b.blob_id) {
-    const blob = await one<{ id: string }>(c.env.DB, "SELECT id FROM blobs WHERE id = ? AND project_id = ? AND status = 'active'", b.blob_id, p.id);
+    const blob = await one<Pick<BlobRow, "id" | "kind">>(
+      c.env.DB,
+      "SELECT id, kind FROM blobs WHERE id = ? AND project_id = ? AND status = 'active'",
+      b.blob_id,
+      p.id,
+    );
     if (!blob) throw notFound("file");
+    if (upload && blob.kind !== "dir") throw badRequest("upload links take files into a directory or a whole project");
     blobId = blob.id;
   }
   const pw = b.password ? String(b.password) : "";
@@ -145,7 +169,7 @@ shares.post("/", async (c) => {
     now(),
   );
   const row = await one<ShareRow>(c.env.DB, `${SHARE_SELECT} WHERE s.id = ?`, id);
-  return c.json(toShare(c, row!), 201);
+  return c.json((await toShares(c, [row!]))[0], 201);
 });
 
 shares.delete("/:id", async (c) => {
@@ -186,21 +210,35 @@ async function isUnlocked(c: Ctx, s: ShareRow): Promise<boolean> {
   return claims?.sub === s.id && claims.typ === "share";
 }
 
-// Project shares list their files a page at a time (by name; `cursor` continues).
+/**
+ * The directories from the share's root down to directory `id` (which must be inside the share),
+ * the root itself left out: the directory's path as the share shows it.
+ */
+async function shareChain(c: Ctx, s: ShareRow, id: string) {
+  const chain = await chainOf(c.env.DB, id);
+  if (!s.blob_id) return chain;
+  const at = chain.findIndex((d) => d.id === s.blob_id);
+  if (at < 0) throw notFound("directory");
+  return chain.slice(at + 1);
+}
+
+// Project and directory shares are browsed a directory at a time (`parent_id`, default: the
+// share's root), by name with directories first; `cursor` continues a listing.
 publicShares.get("/:token", async (c) => {
   const s = await loadShare(c, c.req.param("token"));
   const unlocked = await isUnlocked(c, s);
   const cursor = c.req.query("cursor") || undefined;
   if (!cursor) c.executionCtx.waitUntil(run(c.env.DB, "UPDATE shares SET view_count = view_count + 1 WHERE id = ?", s.id));
+  const kind = !s.blob_id ? "project" : isFileShare(s) ? "blob" : "dir";
   if (s.mode === "upload") {
     // Uploaders learn where their files go and how much the link still takes, nothing else.
     return c.json({
       share: {
         token: s.token,
         mode: s.mode,
-        kind: "project",
-        name: s.project_name,
-        description: s.project_description,
+        kind,
+        name: s.blob_name ?? s.project_name,
+        description: s.blob_id ? "" : s.project_description,
         has_password: !!s.password_hash,
         locked: !unlocked,
         expires_at: s.expires_at,
@@ -213,24 +251,28 @@ publicShares.get("/:token", async (c) => {
       },
     });
   }
-  let blobs: Pick<BlobRow, "id" | "name" | "size" | "content_type" | "created_at">[] | undefined;
-  let nextCursor: string | null = null;
-  if (unlocked && s.blob_id) {
-    blobs = await all(c.env.DB, "SELECT id, name, size, content_type, created_at FROM blobs WHERE id = ? AND status = 'active'", s.blob_id);
+  const pub = (b: BlobRow, path: string) => ({ id: b.id, kind: b.kind, name: b.name, path, size: b.size, content_type: b.content_type, created_at: b.created_at });
+  let listing: object = {};
+  if (unlocked && isFileShare(s)) {
+    const rows = await all<BlobRow>(c.env.DB, "SELECT * FROM blobs WHERE id = ? AND status = 'active'", s.blob_id);
+    listing = { blobs: rows.map((b) => pub(b, b.name)), next_cursor: null };
   } else if (unlocked) {
+    const parentId = c.req.query("parent_id");
+    const dir = parentId ? await requireDir(c.env.DB, s.project_id, parentId) : shareRoot(s);
+    const chain = await shareChain(c, s, dir);
+    const prefix = chain.map((d) => `${d.name}/`).join("");
     const page = await listBlobs(
       c.env.DB,
       { id: s.project_id, blob_count: s.project_blob_count },
-      { sort: "name", order: "asc", limit: int(c.req.query("limit") ?? 5000, "limit", 1, 5000), cursor },
+      { dir, sort: "name", order: "asc", limit: int(c.req.query("limit") ?? 5000, "limit", 1, 5000), cursor },
     );
-    blobs = page.rows.map(({ id, name, size, content_type, created_at }) => ({ id, name, size, content_type, created_at }));
-    nextCursor = page.next_cursor;
+    listing = { dir: dirInfo(chain), blobs: page.rows.map((b) => pub(b, prefix + b.name)), next_cursor: page.next_cursor };
   }
   return c.json({
     share: {
       token: s.token,
       mode: s.mode,
-      kind: s.blob_id ? "blob" : "project",
+      kind,
       name: s.blob_name ?? s.project_name,
       has_password: !!s.password_hash,
       locked: !unlocked,
@@ -239,10 +281,10 @@ publicShares.get("/:token", async (c) => {
       download_count: s.download_count,
       creator: s.creator_display_name || s.creator_username || "",
       created_at: s.created_at,
-      file_count: s.blob_id ? 1 : s.project_blob_count,
-      total_bytes: s.blob_id ? (s.blob_size ?? 0) : s.project_used_bytes,
+      file_count: kind === "blob" ? 1 : kind === "project" ? s.project_blob_count : null,
+      total_bytes: kind === "blob" ? (s.blob_size ?? 0) : kind === "project" ? s.project_used_bytes : null,
     },
-    ...(blobs ? { blobs, next_cursor: nextCursor } : {}),
+    ...listing,
   });
 });
 
@@ -262,14 +304,21 @@ publicShares.post("/:token/unlock", async (c) => {
   return c.json({ access_token: access });
 });
 
-/** The shared file a download asks for, by id or by name; 404 when the share does not cover it. */
-async function shareBlob(c: Ctx, s: ShareRow, by: { id: string } | { name: string }): Promise<BlobRow> {
+/** The shared file a download asks for, by id or by path; 404 when the share does not cover it. */
+async function shareBlob(c: Ctx, s: ShareRow, by: { id: string } | { path: string[] }): Promise<BlobRow> {
   if (s.mode !== "download") throw notFound("file");
-  const blob =
-    "id" in by
-      ? await one<BlobRow>(c.env.DB, "SELECT * FROM blobs WHERE id = ? AND project_id = ? AND status = 'active'", by.id, s.project_id)
-      : await one<BlobRow>(c.env.DB, "SELECT * FROM blobs WHERE project_id = ? AND name = ? AND status = 'active'", s.project_id, by.name);
-  if (!blob || (s.blob_id && s.blob_id !== blob.id)) throw notFound("file");
+  const db = c.env.DB;
+  let blob: BlobRow | null;
+  if ("id" in by) {
+    blob = await one<BlobRow>(db, "SELECT * FROM blobs WHERE id = ? AND project_id = ? AND status = 'active'", by.id, s.project_id);
+    // Inside the shared directory?
+    if (blob && s.blob_id && s.blob_id !== blob.id) await shareChain(c, s, blob.parent_id).catch(() => (blob = null));
+  } else if (isFileShare(s)) {
+    blob = by.path.length === 1 && by.path[0] === s.blob_name ? await one<BlobRow>(db, "SELECT * FROM blobs WHERE id = ? AND status = 'active'", s.blob_id) : null;
+  } else {
+    blob = await findPath(db, s.project_id, by.path, shareRoot(s));
+  }
+  if (!blob || blob.kind !== "file") throw notFound("file");
   return blob;
 }
 
@@ -299,16 +348,16 @@ publicShares.get("/:token/blobs/:blobId/download", async (c) => {
   return c.json({ url, expires_at: now() + DOWNLOAD_TTL * 1000 });
 });
 
-// ---- Direct links for wget, curl and scripts: /s/<token> and /s/<token>/<name> (aliases, see
-// app.ts). A file redirects to a presigned URL, counted like any share download; a project share
-// without a name lists one direct link per file. Answers are text/plain, errors too.
+// ---- Direct links for wget, curl and scripts: /s/<token> and /s/<token>/<path> (aliases, see
+// app.ts). A file redirects to a presigned URL, counted like any share download; a project or
+// directory share without a path lists one direct link per file. Answers are text/plain, errors too.
 
-/** Direct links a project share lists at /s/<token> (its first files by name). */
+/** Direct links a project or directory share lists at /s/<token> (its first files, top directories first). */
 export const DIRECT_LIST_LIMIT = 1000;
 
-publicShares.get("/:token/direct/:name?", async (c) => {
+publicShares.on(["GET"], ["/:token/direct", "/:token/direct/:path{.+}"], async (c) => {
   const token = c.req.param("token");
-  const name = c.req.param("name");
+  const name = c.req.param("path");
   const origin = publicOrigin(c);
   const page = `${origin}/s/${encodeURIComponent(token)}`;
   // A chat app previewing /s/<token>/<name> gets the share page rather than using up a download.
@@ -318,18 +367,14 @@ publicShares.get("/:token/direct/:name?", async (c) => {
     if (s.mode === "upload") throw new ApiError(404, "not_found", `this is an upload link; open ${page} in a browser`);
     if (!(await isUnlocked(c, s)))
       throw new ApiError(403, "invalid_password", `this share is password protected; open ${page} in a browser`);
-    if (name === undefined && !s.blob_id) {
-      const files = await listBlobs(
-        c.env.DB,
-        { id: s.project_id, blob_count: s.project_blob_count },
-        { sort: "name", order: "asc", limit: DIRECT_LIST_LIMIT },
-      );
+    if (name === undefined && !isFileShare(s)) {
+      const files = await subtreeFiles(c.env.DB, s.project_id, shareRoot(s), DIRECT_LIST_LIMIT);
       const access = c.req.query("access_token");
       const suffix = access ? `?access_token=${encodeURIComponent(access)}` : "";
       c.executionCtx.waitUntil(run(c.env.DB, "UPDATE shares SET view_count = view_count + 1 WHERE id = ?", s.id));
-      return c.text(files.rows.map((b) => `${directLink(origin, s.token, b.name)}${suffix}\n`).join(""));
+      return c.text(files.map((f) => `${directLink(origin, s.token, f.path)}${suffix}\n`).join(""));
     }
-    const blob = await shareBlob(c, s, name === undefined ? { id: s.blob_id! } : { name: name.normalize("NFC") });
+    const blob = await shareBlob(c, s, name === undefined ? { id: s.blob_id! } : { path: splitPath(name) });
     // HEAD describes the file without counting a download (wget asks first with some options).
     if (c.req.method === "HEAD")
       return c.body(null, 200, {
@@ -346,7 +391,7 @@ publicShares.get("/:token/direct/:name?", async (c) => {
   }
 });
 
-// ---- Upload links (mode 'upload'): anonymous uploads into the share's project. Uploaders can
+// ---- Upload links (mode 'upload'): anonymous uploads into the share's project or directory. Uploaders can
 // only add files: nothing is listed, downloaded or replaced (a taken name becomes "name (1).ext").
 // Bytes go straight to S3 like every other upload; usage and stats are charged to the project
 // owner. Each init hands out an upload token (a JWT for that one pending blob of that link), which
@@ -374,7 +419,7 @@ publicShares.post("/:token/uploads", async (c) => {
     throw new ApiError(413, "upload_too_large", "the file is larger than what this upload link can still take");
   c.set("statsUser", s.owner_id);
   const project = { id: s.project_id, owner_id: s.owner_id, storage_id: s.project_storage_id };
-  const init = await startUpload(c, project, { ...req, overwrite: false, uploaderId: null, viaInbox: true });
+  const init = await startUpload(c, project, { ...req, parentId: shareRoot(s), overwrite: false, uploaderId: null, viaInbox: true });
   const upload_token = await signJwt(c.env.APP_SECRET, { sub: init.blob_id, sid: s.id, typ: "upload" }, UPLOAD_TTL);
   return c.json({ ...init, upload_token }, 201);
 });

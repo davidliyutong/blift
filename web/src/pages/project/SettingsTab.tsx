@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router";
-import { Button, Input, InlineCopyText } from "@cloudflare/kumo";
+import { Link, useNavigate } from "react-router";
+import { Button, ClipboardText, Input, InlineCopyText, Switch } from "@cloudflare/kumo";
 import { TrashIcon } from "@phosphor-icons/react";
 import { api, type Project } from "@/api";
 import { useI18n } from "@/i18n";
@@ -82,6 +82,41 @@ export function SettingsTab({ project, onUpdated }: { project: Project; onUpdate
             </Detail>
             <Detail label={t("common.created")}>{formatDate(project.created_at, lang)}</Detail>
           </div>
+        </div>
+      </Section>
+
+      <Section title={t("webdav.title")} description={t("webdav.projectDesc")}>
+        <div className="flex flex-col gap-4">
+          {isOwner ? (
+            <Switch
+              label={t("webdav.enable")}
+              checked={project.webdav_enabled}
+              onCheckedChange={async (on) => {
+                try {
+                  await api.projects.update(project.id, { webdav_enabled: on });
+                  toast.success(t(on ? "webdav.enabled" : "webdav.disabled"));
+                  onUpdated();
+                } catch (err) {
+                  toast.error(errMsg(err));
+                }
+              }}
+            />
+          ) : (
+            <Detail label={t("webdav.title")}>{t(project.webdav_enabled ? "common.enabled" : "common.disabled")}</Detail>
+          )}
+          {project.webdav_enabled && (
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium">{t("webdav.url")}</span>
+              <ClipboardText text={project.webdav_url} size="base" />
+              <p className="m-0 text-sm text-kumo-subtle">
+                {t("webdav.signIn")}{" "}
+                <Link to="/settings#webdav" className="text-kumo-link">
+                  {t("webdav.managePasswords")}
+                </Link>
+              </p>
+              <p className="m-0 text-xs text-kumo-subtle">{t("webdav.limits")}</p>
+            </div>
+          )}
         </div>
       </Section>
 

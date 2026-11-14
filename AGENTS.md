@@ -93,6 +93,15 @@ The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). 
     (GC deletes the object, then the row).
   - project: `active` → `deleting` (all blobs flagged deleted, quota released immediately) → GC
     deletes the row once its blobs are gone.
+- Directories (`services/tree.ts`): a directory is a `blobs` row with `kind = 'dir'` (no object in
+  storage), and every row names its directory in `parent_id` (`''` = the project's root). Paths
+  are **never stored**: they are resolved with one recursive query over at most 16 rows
+  (`walkPath`, `chainsOf`), so moving or renaming a directory writes one row. Names are unique
+  per directory by the index `blobs_project_name`, files and directories alike. Deleting a
+  directory only flags its row, which makes everything below unreachable by path;
+  `drainDeletedDirs` then releases the contents level by level, a bounded amount in the request
+  and the rest in GC. Queries that mean files must say `kind = 'file'`; S3 work must never see a
+  directory row (`storage_id = ''`).
 - Quota/usage: `projects.used_bytes/blob_count` and `users.used_bytes` are maintained
   incrementally; GC `reconcile`s them against the real data once a day. Usage counts against the
   **project owner**.
@@ -102,15 +111,23 @@ The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). 
   after the response (`waitUntil`).
 - Errors: throw `ApiError(status, code, message)` (`lib/errors.ts`); `app.onError` renders it as
   `{error:{code,message}}`. The `code` is part of the contract; clients translate by it.
+- WebDAV (`routes/dav.ts`, `/dav/<owner>/<project>/…` through the `/dav` alias): LOCK/UNLOCK are
+  answered but deliberately lock nothing (real locks would add a read to every write), Basic
+  sign-in with a WebDAV password (`services/dav.ts`), built on the directory functions of
+  `services/tree.ts`. A file's ETag is its blob id; every change inside a directory touches that
+  directory's `updated_at`, because clients watch its `getlastmodified`. The smoke test replays
+  what Zotero and OmniFocus send; keep it passing.
 - Security: session tokens are stored only as SHA-256; S3 secrets, OIDC client secrets and TOTP
   secrets are stored encrypted with AES-GCM keyed from `APP_SECRET` and never returned to clients;
   redirects only go to relative in-site paths (`safeRedirect`).
 
 ### Cloudflare limits (check each one when writing server code)
 
-- File bytes **never** pass through the server: all uploads and downloads use presigned URLs. The
-  only exception is `/api/cli/download`, which relays CLI release files (a few MB, allowlisted,
-  `immutable` + edge cache).
+- File bytes **never** pass through the server: all uploads and downloads use presigned URLs.
+  Two exceptions: `/api/cli/download`, which relays CLI release files (a few MB, allowlisted,
+  `immutable` + edge cache), and WebDAV (`routes/dav.ts`), whose clients can only talk to the URL
+  they were given: bodies are streamed (no CPU time), Workers cap a request body at 100 MB, and
+  each request makes at most two S3 calls.
 - Every S3 call is a subrequest (50 per invocation on the free plan): at most 1–2 in a request
   path; batch work belongs in GC, bounded by `GC_BUDGET`.
 - Outbound concurrency ≤ 6: use `pool(items, 6, fn)` from `lib/http.ts`.
@@ -148,17 +165,23 @@ The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). 
 
 ## CLI conventions (`cli/`)
 
+- Places in a project are written `project:path` (`internal/cmd/path.go`); `cp` follows cp/rsync
+  (a trailing slash means "the contents of"). Commands that take a project first keep accepting
+  the older `<project> <path>...`.
 - Entry point `cmd/blift`; commands in `internal/cmd`, the HTTP client in `internal/api`, the
   transfer engine in `internal/transfer`, messages in `internal/i18n` (one English and one Chinese
   map with identical keys).
-- Keep dependencies minimal (cobra, x/term). It must cross-compile with `CGO_ENABLED=0` for
+- Keep dependencies few: cobra, x/term, and bubbletea + lipgloss for `blift browse`
+  (`internal/cmd/browse.go`; pure Go). It must cross-compile with `CGO_ENABLED=0` for
   linux/darwin × amd64/arm64 (`make cli-all`).
 - Config lives in `$XDG_CONFIG_HOME/blift/config.json` (0600); `BLIFT_SERVER` / `BLIFT_TOKEN` /
   `BLIFT_LANG` override it.
 
 ## Product boundaries (don't build these)
 
-- No folders or trees: only project → blob. Blob names cannot contain `/`.
+- Projects do not nest: project → directories (≤ 16 levels) → files. Names cannot contain `/`;
+  paths exist only at the edges (API parameters, CLI arguments), never in the database.
 - No billing, elaborate auditing, rate limiting or other "enterprise" features; this is an
   internal tool, keep it light and avoid overly defensive programming.
-- No file traffic through the server (including conveniences such as "proxied downloads").
+- No file traffic through the server (including conveniences such as "proxied downloads"), other
+  than WebDAV, which cannot work without it.

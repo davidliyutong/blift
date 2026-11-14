@@ -146,6 +146,25 @@ export class S3 {
     return { size: Number(res.headers.get("content-length") ?? 0), etag: res.headers.get("etag") ?? "" };
   }
 
+  /**
+   * GET through the server (WebDAV only; everything else downloads with presigned URLs). The
+   * response is handed on as it is: 200, 206 for a range, 416; null when the object is missing.
+   */
+  async get(key: string, headers: Record<string, string> = {}): Promise<Response | null> {
+    const res = await this.aws.fetch(this.url(key), { method: "GET", headers });
+    if (res.status === 404) return null;
+    if (!res.ok && res.status !== 416) throw await toError(res);
+    return res;
+  }
+
+  /** CopyObject inside the bucket (objects up to 5 GiB). */
+  async copy(from: string, to: string): Promise<void> {
+    const source = `/${this.cfg.bucket}/${from.split("/").map(encodeURIComponent).join("/")}`;
+    const res = await this.send("PUT", to, { headers: { "x-amz-copy-source": source } });
+    const text = await res.text();
+    if (text.includes("<Error>")) throw storageError(xmlValue(text, "Code") ?? "", xmlValue(text, "Message") ?? "");
+  }
+
   async put(key: string, body: string): Promise<void> {
     await this.send("PUT", key, { body, headers: { "content-type": "text/plain" } });
   }

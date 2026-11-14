@@ -2,8 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useLocation } from "react-router";
 import QRCode from "qrcode";
 import { Badge, Banner, Button, Checkbox, ClipboardText, CodeBlock, Empty, Input, LayerCard, Select, Table } from "@cloudflare/kumo";
-import { KeyIcon, PlusIcon, ShieldCheckIcon, ShieldSlashIcon, TerminalWindowIcon, WarningIcon } from "@phosphor-icons/react";
-import { api, type ApiKey } from "@/api";
+import { HardDrivesIcon, KeyIcon, PlusIcon, ShieldCheckIcon, ShieldSlashIcon, TerminalWindowIcon, WarningIcon } from "@phosphor-icons/react";
+import { api, type ApiKey, type DavPassword } from "@/api";
 import { useI18n, type Lang } from "@/i18n";
 import { useAsync } from "@/lib/hooks";
 import { useSession, useUser } from "@/lib/session";
@@ -12,7 +12,7 @@ import { formatDate, formatRelative } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { digits, formValues } from "@/lib/form";
 import { Detail, ErrorState, Loading, Page, Section } from "@/components/Page";
-import { FormDialog } from "@/components/Dialogs";
+import { ConfirmDialog, FormDialog } from "@/components/Dialogs";
 import { LANGS } from "@/components/Preferences";
 import { QuotaMeter } from "@/pages/Projects";
 
@@ -76,6 +76,7 @@ export function AccountPage() {
       <SessionsSection />
       <CliSection />
       <ApiKeysSection />
+      <DavPasswordsSection />
     </Page>
   );
 }
@@ -441,6 +442,202 @@ function ApiKeysSection() {
       <CreateApiKeyDialog open={creating} onOpenChange={setCreating} onCreated={keys.reload} />
       <DeleteApiKeyDialog apiKey={deleting} onClose={() => setDeleting(null)} onDeleted={keys.reload} />
     </div>
+  );
+}
+
+function DavPasswordsSection() {
+  const { t, lang } = useI18n();
+  const list = useAsync(() => api.auth.davPasswords().then((r) => r.dav_passwords), []);
+  const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<DavPassword | null>(null);
+
+  return (
+    <div id="webdav">
+      <Section
+        title={
+          <span className="flex items-center gap-2">
+            <HardDrivesIcon size={18} />
+            {t("webdav.passwords")}
+          </span>
+        }
+        description={t("webdav.passwordsDesc")}
+        actions={
+          <Button variant="primary" icon={PlusIcon} onClick={() => setCreating(true)}>
+            {t("webdav.create")}
+          </Button>
+        }
+        bodyClassName="p-0"
+      >
+        {list.error != null && (
+          <div className="p-5">
+            <ErrorState error={list.error} onRetry={list.reload} />
+          </div>
+        )}
+        {list.loading && !list.data ? (
+          <Loading />
+        ) : list.data?.length === 0 ? (
+          <Empty size="sm" icon={<HardDrivesIcon size={32} />} title={t("webdav.emptyTitle")} description={t("webdav.emptyDesc")} />
+        ) : (
+          <LayerCard className="rounded-none p-0 ring-0">
+            <Table>
+              <Table.Header>
+                <Table.Row>
+                  <Table.Head>{t("common.name")}</Table.Head>
+                  <Table.Head>{t("webdav.scope")}</Table.Head>
+                  <Table.Head className="hidden md:table-cell">{t("account.lastUsed")}</Table.Head>
+                  <Table.Head className="hidden md:table-cell">{t("common.created")}</Table.Head>
+                  <Table.Head className="w-24" />
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {(list.data ?? []).map((d) => (
+                  <Table.Row key={d.id}>
+                    <Table.Cell>
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-medium">{d.name}</span>
+                        {d.readonly && <Badge variant="neutral">{t("webdav.readonly")}</Badge>}
+                      </div>
+                    </Table.Cell>
+                    <Table.Cell className="text-kumo-subtle">{d.project_id ? (d.project_name ?? "—") : t("webdav.allProjects")}</Table.Cell>
+                    <Table.Cell className="hidden text-kumo-subtle md:table-cell">
+                      {d.last_used_at ? formatRelative(d.last_used_at, lang) : "—"}
+                    </Table.Cell>
+                    <Table.Cell className="hidden text-kumo-subtle md:table-cell">{formatDate(d.created_at, lang)}</Table.Cell>
+                    <Table.Cell className="text-right">
+                      <Button size="sm" variant="secondary-destructive" onClick={() => setDeleting(d)}>
+                        {t("common.delete")}
+                      </Button>
+                    </Table.Cell>
+                  </Table.Row>
+                ))}
+              </Table.Body>
+            </Table>
+          </LayerCard>
+        )}
+      </Section>
+
+      <CreateDavPasswordDialog open={creating} onOpenChange={setCreating} onCreated={list.reload} />
+      <ConfirmDialog
+        open={deleting != null}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title={t("webdav.deleteTitle", { name: deleting?.name ?? "" })}
+        description={t("webdav.deleteDesc")}
+        onConfirm={async () => {
+          await api.auth.deleteDavPassword(deleting!.id);
+          toast.success(t("webdav.deleted"));
+          list.reload();
+        }}
+      />
+    </div>
+  );
+}
+
+function CreateDavPasswordDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: () => void;
+}) {
+  const { t } = useI18n();
+  const projects = useAsync(async () => (open ? (await api.projects.list()).projects : []), [open]);
+  const [name, setName] = useState("");
+  const [custom, setCustom] = useState(false);
+  const [password, setPassword] = useState("");
+  const [projectId, setProjectId] = useState("all");
+  const [readonly, setReadonly] = useState(false);
+  const [created, setCreated] = useState<{ username: string; password?: string } | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setCustom(false);
+      setPassword("");
+      setProjectId("all");
+      setReadonly(false);
+      setCreated(null);
+    }
+  }, [open]);
+
+  if (created) {
+    return (
+      <FormDialog
+        open={open}
+        onOpenChange={onOpenChange}
+        title={t("webdav.createdTitle")}
+        footer={
+          <Button variant="primary" onClick={() => onOpenChange(false)}>
+            {t("common.done")}
+          </Button>
+        }
+      >
+        {created.password && <Banner variant="alert" icon={<WarningIcon weight="fill" />} title={t("webdav.copyNow")} size="sm" />}
+        <div className="flex flex-col gap-2">
+          <span className="text-sm font-medium">{t("common.username")}</span>
+          <ClipboardText text={created.username} size="base" />
+        </div>
+        {created.password && (
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-medium">{t("common.password")}</span>
+            <ClipboardText text={created.password} size="base" />
+          </div>
+        )}
+        <p className="m-0 text-sm text-kumo-subtle">{t("webdav.createdHint")}</p>
+      </FormDialog>
+    );
+  }
+
+  return (
+    <FormDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={t("webdav.create")}
+      submitLabel={t("common.create")}
+      submitDisabled={!name.trim() || (custom && password.length < 10)}
+      onSubmit={async () => {
+        const r = await api.auth.createDavPassword({
+          name: name.trim(),
+          password: custom ? password : undefined,
+          project_id: projectId === "all" ? undefined : projectId,
+          readonly,
+        });
+        setCreated({ username: r.username, password: r.password });
+        onCreated();
+      }}
+    >
+      <Input
+        label={t("common.name")}
+        description={t("webdav.nameHint")}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={100}
+        autoComplete="off"
+        autoFocus
+      />
+      <Select
+        label={t("webdav.scope")}
+        hideLabel={false}
+        className="w-full"
+        value={projectId}
+        onValueChange={(v) => setProjectId(v as string)}
+        items={{ all: t("webdav.allProjects"), ...Object.fromEntries((projects.data ?? []).map((p) => [p.id, `${p.owner.username}/${p.name}`])) }}
+      />
+      <Checkbox label={t("webdav.readonlyLabel")} checked={readonly} onCheckedChange={(v) => setReadonly(v === true)} />
+      <Checkbox label={t("webdav.custom")} checked={custom} onCheckedChange={(v) => setCustom(v === true)} />
+      {custom && (
+        <Input
+          label={t("common.password")}
+          description={t("webdav.customHint")}
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          maxLength={128}
+          autoComplete="new-password"
+        />
+      )}
+    </FormDialog>
   );
 }
 

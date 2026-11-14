@@ -62,6 +62,8 @@ const root = new Hono();
 const toApi = (c: Context) => api.fetch(resolveAlias(c.req.raw), env, ctx as never);
 root.all("/api/*", toApi);
 root.get("/install.sh", toApi);
+root.all("/dav", toApi);
+root.all("/dav/*", toApi);
 // Share links: browsers get the page (static files and SPA fallback below), wget and curl the file.
 root.get("/s/*", (c, next) => (isSharePage(c.req.raw) ? next() : toApi(c)));
 root.use(

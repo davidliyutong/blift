@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -29,24 +30,27 @@ func projectLsCmd() *cobra.Command {
 		Aliases: []string{"list"},
 		Short:   i18n.T("cmd.project.ls"),
 		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			c, err := client()
-			if err != nil {
-				return err
-			}
-			projects, err := c.Projects(cmd.Context())
-			if err != nil || jsonOut {
-				return orJSON(err, projects)
-			}
-			rows := make([][]string, 0, len(projects))
-			for _, p := range projects {
-				rows = append(rows, []string{p.Name, p.Owner.Username, p.Role,
-					strconv.FormatInt(p.BlobCount, 10), ui.Size(p.UsedBytes), ui.Time(p.UpdatedAt), p.ID})
-			}
-			table([]string{"col.name", "col.owner", "col.role", "col.files", "col.size", "col.updated", "col.id"}, rows)
-			return nil
-		},
+		RunE:    func(cmd *cobra.Command, _ []string) error { return listProjects(cmd.Context()) },
 	}
+}
+
+// listProjects is `blift project ls`, and `blift ls` without arguments.
+func listProjects(ctx context.Context) error {
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	projects, err := c.Projects(ctx)
+	if err != nil || jsonOut {
+		return orJSON(err, projects)
+	}
+	rows := make([][]string, 0, len(projects))
+	for _, p := range projects {
+		rows = append(rows, []string{p.Name, p.Owner.Username, p.Role,
+			strconv.FormatInt(p.BlobCount, 10), ui.Size(p.UsedBytes), ui.Time(p.UpdatedAt), p.ID})
+	}
+	table([]string{"col.name", "col.owner", "col.role", "col.files", "col.size", "col.updated", "col.id"}, rows)
+	return nil
 }
 
 func projectCreateCmd() *cobra.Command {

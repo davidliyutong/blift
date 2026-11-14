@@ -20,7 +20,10 @@ AWS S3、RustFS、MinIO……）为后端。它原生运行在 **Cloudflare Work
 
 ## 特性
 
-- **极简结构**：只有「项目 → 文件」两级，没有文件夹树。
+- **项目与文件夹**：项目里可以建文件夹，最多嵌套 16 层。移动或重命名文件夹瞬间完成，与其中内容多少无关；
+  文件夹可以像文件一样分享。
+- **WebDAV**：按项目开启后，Zotero、OmniFocus 或文件管理器即可连接 `/dav/<所有者>/<项目>/`，
+  使用 WebDAV 专用密码登录，而不是账户密码。
 - **直传**：≤ 64 MiB 的文件单次预签名 `PUT`，更大的自动分片并行上传（单片失败单独重试）；CLI 分段并行下载。
 - **任意 S3 兼容存储**：可同时配置多个后端，按项目选择（可为后端标注「新加坡」这样的区域，方便用户挑选）；管理页「应用 CORS」一键配置存储桶。
 - **分享**：单个文件或整个项目的公开链接，可设访问密码、有效期、下载次数上限；接收方无需账号，也可以直接用 `wget` / `curl` 下载。
@@ -100,6 +103,12 @@ make deploy         # 构建前端并部署 API + 静态资源 + GC 定时任务
 `pnpm install --frozen-lockfile && make cf-config`，部署命令填 `make deploy`，并设置构建变量 `CF_D1_ID`（D1 数据库 ID），
 以及可选的 `CF_DOMAIN`（自定义域名）和 `PUBLIC_URL`。`make cf-config` 每次构建都从模板生成
 `server/wrangler.local.toml`，模板的变化会自动生效，无需手动修改。
+
+其他分支（如 PR）的构建可以部署一个 [Worker Preview](https://developers.cloudflare.com/workers/previews/)：
+把非生产分支的部署命令设为 `make preview`，并把构建变量 `CF_PREVIEW_D1_ID` 设为一个**单独的** D1 数据库
+（`wrangler d1 create blift-preview`）。预览会执行所在分支的数据库迁移，所以绝不能与生产库共用；它还需要自己的
+`APP_SECRET`（`wrangler preview secret`），并且没有定时触发器，不会运行 GC。不需要预览时，在 Worker 的 Builds
+设置里关闭非生产分支构建即可。
 
 ### 本地开发
 

@@ -134,14 +134,19 @@ func (c *Client) Storages(ctx context.Context) ([]Storage, error) {
 
 // BlobQuery selects blobs of a project; zero values mean the server defaults.
 type BlobQuery struct {
-	Q      string   // name contains
-	Prefix string   // name starts with (case-insensitive)
-	Names  []string // exact names, ≤ 50
-	Sort   string   // name | size | created_at
-	Order  string   // asc | desc
-	Limit  int      // page size, ≤ 1000
-	Cursor string   // next_cursor of the previous page
-	offset int      // servers before v0.1.2 page by offset only
+	// Dir lists one directory (ParentID, or Path from the root; both empty = the root), its
+	// directories first. Without it the listing has all files of the project, at every level.
+	Dir      bool
+	ParentID string
+	Path     string
+	Q        string   // name contains
+	Prefix   string   // name starts with (case-insensitive)
+	Names    []string // exact names, ≤ 50
+	Sort     string   // name | size | created_at
+	Order    string   // asc | desc
+	Limit    int      // page size, ≤ 1000
+	Cursor   string   // next_cursor of the previous page
+	offset   int      // servers before v0.1.2 page by offset only
 }
 
 // BlobsPage fetches one page.
@@ -154,6 +159,11 @@ func (c *Client) BlobsPage(ctx context.Context, projectID string, q BlobQuery) (
 	}
 	for _, n := range q.Names {
 		v.Add("name", n)
+	}
+	if q.Dir && q.ParentID != "" {
+		v.Set("parent_id", q.ParentID)
+	} else if q.Dir {
+		v.Set("path", "/"+q.Path)
 	}
 	if q.Limit > 0 {
 		v.Set("limit", strconv.Itoa(q.Limit))
@@ -220,6 +230,37 @@ func (c *Client) BlobsNamed(ctx context.Context, projectID string, names []strin
 func (c *Client) Blob(ctx context.Context, id string) (*Blob, error) {
 	var b Blob
 	return &b, c.do(ctx, http.MethodGet, "/api/blobs/"+esc(id), nil, &b)
+}
+
+// Stat returns the file or directory at a path of a project (not_found if there is none).
+func (c *Client) Stat(ctx context.Context, projectID, path string) (*Blob, error) {
+	var b Blob
+	return &b, c.do(ctx, http.MethodGet, "/api/projects/"+esc(projectID)+"/stat?path="+url.QueryEscape(path), nil, &b)
+}
+
+// Mkdir creates the directory path below the directory parentID ("" = the root). With parents
+// it works like mkdir -p: missing directories are created and an existing one is returned.
+func (c *Client) Mkdir(ctx context.Context, projectID, parentID, path string, parents bool) (*Blob, error) {
+	body := map[string]any{"path": path, "parents": parents}
+	if parentID != "" {
+		body["parent_id"] = parentID
+	}
+	var b Blob
+	return &b, c.do(ctx, http.MethodPost, "/api/projects/"+esc(projectID)+"/dirs", body, &b)
+}
+
+// MoveBlob renames a blob (name != "") and/or moves it into the directory *parentID ("" = the
+// root; nil = stay where it is).
+func (c *Client) MoveBlob(ctx context.Context, id, name string, parentID *string) (*Blob, error) {
+	body := map[string]any{}
+	if name != "" {
+		body["name"] = name
+	}
+	if parentID != nil {
+		body["parent_id"] = *parentID
+	}
+	var b Blob
+	return &b, c.do(ctx, http.MethodPatch, "/api/blobs/"+esc(id), body, &b)
 }
 
 func (c *Client) RenameBlob(ctx context.Context, id, name string) (*Blob, error) {
@@ -311,11 +352,23 @@ func accessHeader(access string) map[string]string {
 	return map[string]string{"X-Share-Access": access}
 }
 
-// PublicShare fetches a share and the first page of its files (cursor: a later page).
+// PublicShare fetches a share and the first page of what it lists (cursor: a later page).
 func (c *Client) PublicShare(ctx context.Context, token, access, cursor string) (*PublicShare, error) {
-	path := "/api/public/shares/" + esc(token)
+	return c.PublicShareDir(ctx, token, access, "", cursor)
+}
+
+// PublicShareDir lists a directory inside a project or directory share ("" = its top).
+func (c *Client) PublicShareDir(ctx context.Context, token, access, parentID, cursor string) (*PublicShare, error) {
+	v := url.Values{}
+	if parentID != "" {
+		v.Set("parent_id", parentID)
+	}
 	if cursor != "" {
-		path += "?cursor=" + url.QueryEscape(cursor)
+		v.Set("cursor", cursor)
+	}
+	path := "/api/public/shares/" + esc(token)
+	if len(v) > 0 {
+		path += "?" + v.Encode()
 	}
 	var s PublicShare
 	return &s, c.doH(ctx, http.MethodGet, path, accessHeader(access), nil, &s)

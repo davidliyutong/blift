@@ -115,14 +115,14 @@ describe("freeName", () => {
         .prepare("INSERT INTO blobs (id, project_id, storage_id, object_key, name, size, content_type, status, created_at, updated_at) VALUES (?, 'p', 's', ?, ?, 1, 'x', ?, 1, 1)")
         .bind(newId(), newId(), name, status);
     await db.batch([add("a.txt"), add("a (1).txt"), add("a (2).txt", "deleted"), add(".env"), add("README")]);
-    expect(await freeName(db, "p", "new.txt")).toBe("new.txt");
-    expect(await freeName(db, "p", "a.txt")).toBe("a (2).txt");
-    expect(await freeName(db, "q", "a.txt")).toBe("a.txt");
-    expect(await freeName(db, "p", ".env")).toBe(".env (1)");
-    expect(await freeName(db, "p", "README")).toBe("README (1)");
+    expect(await freeName(db, "p", "", "new.txt")).toBe("new.txt");
+    expect(await freeName(db, "p", "", "a.txt")).toBe("a (2).txt");
+    expect(await freeName(db, "q", "", "a.txt")).toBe("a.txt");
+    expect(await freeName(db, "p", "", ".env")).toBe(".env (1)");
+    expect(await freeName(db, "p", "", "README")).toBe("README (1)");
     const long = `${"x".repeat(251)}.bin`;
     await db.batch([add(long)]);
-    const renamed = await freeName(db, "p", long);
+    const renamed = await freeName(db, "p", "", long);
     expect(renamed).toMatch(/^x+ \(1\)\.bin$/);
     expect(renamed.length).toBeLessThanOrEqual(255);
     db.close();
@@ -364,7 +364,7 @@ describe("share links", () => {
     expect(path("/s/AbC123")).toBe("/api/public/shares/AbC123/direct");
     expect(path("/s/AbC123/")).toBe("/api/public/shares/AbC123/direct");
     expect(path("/s/AbC123/a%20b.txt")).toBe("/api/public/shares/AbC123/direct/a%20b.txt");
-    expect(path("/s/AbC123/a/b")).toBe("/s/AbC123/a/b");
+    expect(path("/s/AbC123/a/b")).toBe("/api/public/shares/AbC123/direct/a/b");
     expect(path("/api/info")).toBe("/api/info");
     expect(new URL(resolveAlias(req("/s/AbC123?access_token=t")).url).search).toBe("?access_token=t");
   });

@@ -64,11 +64,13 @@ r.patch("/:id", async (c) => {
     (await one(c.env.DB, "SELECT 1 AS x FROM projects WHERE owner_id = ? AND name = ? COLLATE NOCASE AND status = 'active'", p.owner_id, name))
   )
     throw nameTaken();
+  const webdav = b.webdav_enabled === undefined ? p.webdav_enabled : b.webdav_enabled === true;
   await run(
     c.env.DB,
-    "UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?",
+    "UPDATE projects SET name = ?, description = ?, webdav_enabled = ?, updated_at = ? WHERE id = ?",
     name,
     description,
+    webdav,
     now(),
     p.id,
   );

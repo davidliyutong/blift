@@ -80,7 +80,8 @@ func newRoot() *cobra.Command {
 	_ = root.RegisterFlagCompletionFunc("lang", fixed("zh", "en"))
 	root.AddCommand(
 		loginCmd(), logoutCmd(), whoamiCmd(), versionCmd(),
-		projectCmd(), lsCmd(), uploadCmd(), downloadCmd(), rmCmd(), mvCmd(), urlCmd(),
+		projectCmd(), lsCmd(), cpCmd(), mvCmd(), rmCmd(), mkdirCmd(), treeCmd(), statCmd(), catCmd(), urlCmd(),
+		uploadCmd(), downloadCmd(), browseCmd(),
 		shareCmd(), updateCmd(),
 	)
 	return root
