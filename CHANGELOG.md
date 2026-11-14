@@ -12,7 +12,14 @@ All notable changes are documented here. The format follows
   folders, upload a folder (picker or drag and drop; its structure is kept), move files and
   folders, share a folder as a download link or an inbox, and browse shared folders on the share
   page. Search still covers the whole project and shows where each file is.
-- **Directories** (server and API; the CLI follows). A project is now a tree, up to
+- Folders in the CLI. Places are written `project:path` (`demo:docs/a.pdf`), as with scp and
+  rclone. New commands: `blift cp` (uploads and downloads, `-r` for whole trees, `-P` files at
+  a time), `mkdir [-p]`, `tree`, `stat` and `cat`. `ls` lists a folder (`-r` for everything
+  below, no arguments for your projects), `mv` moves as well as renames, `rm -r` deletes
+  folders, `share create demo:docs` shares a folder and `share get` downloads one with its
+  structure. Shell completion follows paths a folder at a time. The older `<project> <name>`
+  forms keep working.
+- **Directories** (server and API). A project is now a tree, up to
   16 levels deep: `POST /api/projects/:id/dirs` (like `mkdir`, or `mkdir -p` with `parents`),
   uploads take a `parent_id`, `GET …/blobs?path=` / `?parent_id=` lists one directory
   (directories first) and `GET …/stat?path=` resolves a path. `PATCH /api/blobs/:id` moves as
@@ -29,6 +36,11 @@ All notable changes are documented here. The format follows
   (`--password` for a protected link, `--name`, `-j`); it stops once the link is used up.
 
 ### Changed
+
+- `blift upload <project> <dir>` no longer uploads the files directly inside a directory: it asks
+  for `-r` and then uploads the whole tree. `blift ls <project>` lists the project's top folder
+  rather than every file (`-r` does that), and several files are transferred at a time, sharing
+  one progress bar.
 
 - **Breaking:** the project inbox is now a kind of share link. "Create share link" offers Download
   or Inbox; an inbox link (`/s/<token>`) can have a password, an expiry and limits on the number of

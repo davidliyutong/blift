@@ -70,7 +70,7 @@ comp rm demo big.bin "" | grep -q '^greeting.txt' || fail "complete other files"
 ok "shell completion: projects, files by prefix, flags, storages"
 
 "$BLIFT" ls demo --limit 1 2>"$WORK/ls.err" | grep -c 'greeting.txt\|big.bin' | grep -qx 1 || fail "ls --limit"
-grep -q "showing 1 of 2" "$WORK/ls.err" || fail "ls --limit hint: $(cat "$WORK/ls.err")"
+grep -q "showing the first 1 entries" "$WORK/ls.err" || fail "ls --limit hint: $(cat "$WORK/ls.err")"
 [ "$("$BLIFT" --json ls demo --all | grep -o '"name"' | wc -l | tr -d ' ')" = 2 ] || fail "ls --all"
 [ "$("$BLIFT" ls demo --query greet | grep -c greeting.txt)" = 1 ] || fail "ls --query"
 ID=$("$BLIFT" --json ls demo --query greet | grep -oE '"id": *"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
@@ -121,6 +121,68 @@ if command -v wget >/dev/null; then
 fi
 curl -sf "$URL" >/dev/null && fail "password share downloaded without a password"
 ok "direct links: curl -OJL, curl -O, wget, share get"
+
+# Folders: project:path, cp / mv / mkdir / tree / stat / cat, recursive transfers both ways.
+mkdir -p "$WORK/tree/photos/2026" "$WORK/tree/empty"
+printf 'one\n' >"$WORK/tree/a.txt"; printf 'two\n' >"$WORK/tree/photos/b.txt"; printf 'three\n' >"$WORK/tree/photos/2026/c.txt"
+"$BLIFT" mkdir demo:docs/2026 2>/dev/null && fail "mkdir created parents without -p"
+"$BLIFT" -q mkdir -p demo:docs/2026
+"$BLIFT" -q mkdir -p demo:docs/2026 || fail "mkdir -p on an existing folder"
+"$BLIFT" -q cp "$WORK/tree/a.txt" demo:docs/2026/            # into a folder
+"$BLIFT" -q cp "$WORK/tree/a.txt" demo:docs/renamed.txt      # under another name
+"$BLIFT" -q upload demo:docs "$WORK/tree/photos/b.txt"       # the older command takes a folder too
+"$BLIFT" cp "$WORK/tree" demo: 2>/dev/null && fail "cp of a directory without -r"
+"$BLIFT" -q cp -r "$WORK/tree" demo:backup                   # the tree becomes backup
+"$BLIFT" -q cp -r "$WORK/tree" demo:backup/                  # …and goes into it as backup/tree
+"$BLIFT" cp "$WORK/tree/a.txt" demo:docs/2026/ 2>"$WORK/cp.err" && fail "cp replaced a file without --overwrite"
+grep -q -- "--overwrite" "$WORK/cp.err" || fail "cp name_taken hint: $(cat "$WORK/cp.err")"
+"$BLIFT" -q cp --overwrite "$WORK/tree/a.txt" demo:docs/2026/
+[ "$("$BLIFT" cat demo:docs/renamed.txt)" = one ] || fail "cat"
+# (Outputs are captured first: with pipefail, `grep -q` closing the pipe early fails the command.)
+LS=$("$BLIFT" ls demo:backup 2>&1); LSR=$("$BLIFT" ls -r demo:backup 2>&1); TREE=$("$BLIFT" tree demo:backup 2>&1)
+grep -q '^photos/' <<<"$LS" || fail "ls of a folder: $LS"
+grep -q '3 folder(s), 1 file(s)' <<<"$LS" || fail "ls summary: $LS"
+[ "$(grep -c 'c.txt' <<<"$LSR")" = 2 ] || fail "ls -r: $LSR"
+grep -q '^tree/photos/2026/c.txt' <<<"$LSR" || fail "ls -r paths: $LSR"
+grep -q '^docs/2026/a.txt' <<<"$("$BLIFT" ls -r demo 2>&1)" || fail "ls -r of a project"
+grep -q '└── c.txt' <<<"$TREE" || fail "tree: $TREE"
+grep -q '7 folder(s), 6 file(s)' <<<"$TREE" || fail "tree summary: $TREE"
+grep -q folder <<<"$("$BLIFT" stat demo:backup/empty)" || fail "stat"
+grep -q "no such file or folder" <<<"$("$BLIFT" stat demo:nope 2>&1 || true)" || fail "stat of a missing path"
+"$BLIFT" -q mv demo:backup/tree demo:docs/                   # a folder, into a folder
+"$BLIFT" -q mv demo:docs/renamed.txt demo:docs/2026/r.txt    # move and rename
+"$BLIFT" mv demo:docs demo:docs/2026/ 2>/dev/null && fail "mv of a folder into itself"
+"$BLIFT" -q mv demo:docs/b.txt demo:docs/2026/a.txt demo:docs/tree/empty/   # several, into a folder
+"$BLIFT" stat demo:docs/tree/empty/a.txt >/dev/null && "$BLIFT" stat demo:docs/tree/empty/b.txt >/dev/null || fail "mv of several files"
+[ "$("$BLIFT" cat demo:docs/2026/r.txt)" = one ] || fail "mv + rename"
+"$BLIFT" stat demo:docs/tree/photos/2026/c.txt >/dev/null || fail "mv of a folder kept its contents"
+comp ls demo:do | grep -q '^demo:docs/	' || fail "complete a folder: $(comp ls demo:do)"
+comp cat demo:docs/2026/ | grep -q '^demo:docs/2026/r.txt	' || fail "complete inside a folder: $(comp cat demo:docs/2026/)"
+[ "$(comp rm demo docs/2026/ | cut -f1)" = "docs/2026/r.txt" ] || fail "complete paths after a bare project: $(comp rm demo docs/2026/)"
+"$BLIFT" -q cp -r demo:backup "$WORK/dl"                     # a folder keeps its name…
+cmp "$WORK/tree/photos/2026/c.txt" "$WORK/dl/backup/photos/2026/c.txt" || fail "cp -r download"
+[ -d "$WORK/dl/backup/empty" ] || fail "cp -r skipped an empty folder"
+"$BLIFT" -q cp -r demo:backup/ "$WORK/dl2"                   # …unless its contents are meant
+cmp "$WORK/tree/a.txt" "$WORK/dl2/a.txt" || fail "cp -r of a folder's contents"
+"$BLIFT" -q cp demo:docs/2026/r.txt "$WORK/r-back.txt" && cmp "$WORK/tree/a.txt" "$WORK/r-back.txt" || fail "cp of one file to a new name"
+"$BLIFT" -q download demo docs/2026/r.txt -o "$WORK/dl3/" && cmp "$WORK/tree/a.txt" "$WORK/dl3/r.txt" || fail "download by path"
+"$BLIFT" cp -r demo:backup 2>/dev/null && fail "cp with one argument"
+grep -q "is a folder (use -r)" <<<"$("$BLIFT" cp demo:backup "$WORK/x" 2>&1 || true)" || fail "cp of a folder without -r"
+ok "folders: mkdir, cp both ways (-r, rename, contents), ls -r, tree, stat, cat, mv, completion"
+
+# Sharing a folder: share get downloads it with its structure; an inbox can point at a folder.
+DSHARE=$("$BLIFT" share create demo:backup 2>/dev/null) || fail "share create of a folder"
+"$BLIFT" -q share get "$DSHARE" -o "$WORK/dshare"
+cmp "$WORK/tree/photos/2026/c.txt" "$WORK/dshare/photos/2026/c.txt" || fail "share get of a folder: $(find "$WORK/dshare")"
+"$BLIFT" -q share get "$DSHARE" photos/b.txt -o "$WORK/dshare2" && cmp "$WORK/tree/photos/b.txt" "$WORK/dshare2/photos/b.txt" || fail "share get of one path"
+DINBOX=$("$BLIFT" share create demo:backup/empty --upload 2>/dev/null) || fail "share create --upload of a folder"
+"$BLIFT" -q share put "$DINBOX" "$WORK/note.txt"
+[ "$("$BLIFT" cat demo:backup/empty/note.txt)" = "dropped off" ] || fail "inbox into a folder"
+grep -q "is a folder (use -r)" <<<"$("$BLIFT" rm demo:backup -y 2>&1 || true)" || fail "rm of a folder without -r"
+"$BLIFT" -q rm -r demo:backup demo:docs -y
+grep -q 'backup/\|docs/' <<<"$("$BLIFT" ls demo)" && fail "rm -r"
+"$BLIFT" share get "$DSHARE" -o "$WORK/gone" 2>/dev/null && fail "share of a deleted folder still works"
+ok "folder shares: share get keeps the structure, inbox into a folder, rm -r"
 
 # Self-update through this server (latest release lookup + download relay); a copy is replaced.
 "$BLIFT" update --check >/dev/null || fail "update --check"

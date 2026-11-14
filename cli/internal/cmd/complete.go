@@ -90,32 +90,70 @@ func completeProjects(cmd *cobra.Command, _ []string, toComplete string) ([]stri
 	})
 }
 
-// completeBlobs offers file names of the project given as the first argument, skipping files
+// pathCandidates completes a path in a project: the entries of the directory typed so far whose
+// names start with the rest. Each candidate is `shown` + path, directories with a trailing slash.
+func pathCandidates(ctx context.Context, c *api.Client, project, typed, shown string, skip map[string]bool) []string {
+	p, err := resolveProject(ctx, c, project)
+	if err != nil {
+		return nil
+	}
+	dir, prefix := "", typed
+	if i := strings.LastIndex(typed, "/"); i >= 0 {
+		dir, prefix = typed[:i+1], typed[i+1:]
+	}
+	page, err := c.BlobsPage(ctx, p.ID, api.BlobQuery{Dir: true, Path: cleanRemote(dir), Prefix: prefix, Sort: "name", Order: "asc", Limit: completeMax})
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, b := range page.Blobs {
+		if skip[dir+b.Name] || !hasPrefixFold(b.Name, prefix) {
+			continue
+		}
+		if b.Kind == "dir" {
+			out = append(out, shown+dir+b.Name+"/\t"+i18n.T("kind.dir"))
+		} else {
+			out = append(out, shown+dir+b.Name+"\t"+ui.Size(b.Size))
+		}
+	}
+	return out
+}
+
+// completeRef completes project[:path]: project names first, then, after the colon, the path.
+// Nothing is appended after a candidate, so a directory can be completed further.
+func completeRef(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	project, path, ok := strings.Cut(toComplete, ":")
+	if !ok {
+		return completeProjects(cmd, args, toComplete)
+	}
+	out, _ := withClient(cmd, func(ctx context.Context, c *api.Client) []string {
+		return pathCandidates(ctx, c, project, path, project+":", nil)
+	})
+	return out, noFiles | cobra.ShellCompDirectiveNoSpace
+}
+
+// completeEither is for cp, whose arguments are local paths or project:path: the shell
+// completes local files unless a project and a colon were typed.
+func completeEither(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if isRemote(toComplete) {
+		return completeRef(cmd, args, toComplete)
+	}
+	return nil, cobra.ShellCompDirectiveDefault
+}
+
+// completeBlobs completes the arguments after the first: project:path like the first, or, when
+// the first is a bare project (`rm demo a.txt b.txt`), paths in that project, skipping those
 // already on the command line.
 func completeBlobs(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	if len(args) == 0 {
-		return nil, noFiles
+	if len(args) == 0 || strings.Contains(args[0], ":") {
+		return completeRef(cmd, args, toComplete)
+	}
+	given := map[string]bool{}
+	for _, a := range args[1:] {
+		given[a] = true
 	}
 	return withClient(cmd, func(ctx context.Context, c *api.Client) []string {
-		p, err := resolveProject(ctx, c, args[0])
-		if err != nil {
-			return nil
-		}
-		page, err := c.BlobsPage(ctx, p.ID, api.BlobQuery{Prefix: toComplete, Sort: "name", Order: "asc", Limit: completeMax})
-		if err != nil {
-			return nil
-		}
-		given := map[string]bool{}
-		for _, a := range args[1:] {
-			given[a] = true
-		}
-		var out []string
-		for _, b := range page.Blobs {
-			if !given[b.Name] && hasPrefixFold(b.Name, toComplete) {
-				out = append(out, b.Name+"\t"+ui.Size(b.Size))
-			}
-		}
-		return out
+		return pathCandidates(ctx, c, args[0], toComplete, "", given)
 	})
 }
 

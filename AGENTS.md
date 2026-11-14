@@ -157,6 +157,9 @@ The full conventions, with examples, are in [CONTRIBUTING.md](CONTRIBUTING.md). 
 
 ## CLI conventions (`cli/`)
 
+- Places in a project are written `project:path` (`internal/cmd/path.go`); `cp` follows cp/rsync
+  (a trailing slash means "the contents of"). Commands that take a project first keep accepting
+  the older `<project> <path>...`.
 - Entry point `cmd/blift`; commands in `internal/cmd`, the HTTP client in `internal/api`, the
   transfer engine in `internal/transfer`, messages in `internal/i18n` (one English and one Chinese
   map with identical keys).

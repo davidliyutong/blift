@@ -17,6 +17,7 @@ import (
 
 type UploadOptions struct {
 	Name      string // blob name; default: base name of the file
+	ParentID  string // projects only: the directory it goes into ("" = the root)
 	Overwrite bool   // projects only: upload links never replace a file
 	Jobs      int    // parallel part uploads (multipart only)
 	Progress  Progress
@@ -122,7 +123,7 @@ func upload(ctx context.Context, t target, path string, o UploadOptions) (err er
 	}
 	ct, size, prog := ContentType(name), st.Size(), orNop(o.Progress)
 
-	up, err := t.init(ctx, api.UploadRequest{Name: name, Size: size, ContentType: ct, Overwrite: o.Overwrite})
+	up, err := t.init(ctx, api.UploadRequest{Name: name, Size: size, ContentType: ct, Overwrite: o.Overwrite, ParentID: o.ParentID})
 	if err != nil {
 		return err
 	}

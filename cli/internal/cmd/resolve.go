@@ -52,36 +52,6 @@ func resolveProject(ctx context.Context, c *api.Client, arg string) (*api.Projec
 	return nil, errors.New(i18n.T("project.ambiguous", arg, strings.Join(cands, "\n")))
 }
 
-// resolveBlobs maps blob names (or ids) to blobs. Names are looked up exactly (50 per request),
-// so this stays cheap however large the project is; arguments that match no name are tried
-// as blob ids.
-func resolveBlobs(ctx context.Context, c *api.Client, projectID string, args []string) ([]api.Blob, error) {
-	named, err := c.BlobsNamed(ctx, projectID, args)
-	if err != nil {
-		return nil, err
-	}
-	byName := map[string]api.Blob{}
-	for _, b := range named {
-		byName[b.Name] = b
-	}
-	out := make([]api.Blob, 0, len(args))
-	for _, a := range args {
-		if b, ok := byName[a]; ok {
-			out = append(out, b)
-			continue
-		}
-		b, err := c.Blob(ctx, a)
-		if err != nil && !api.IsCode(err, "not_found") {
-			return nil, err
-		}
-		if err != nil || b.ProjectID != projectID {
-			return nil, errors.New(i18n.T("blob.not_found", a))
-		}
-		out = append(out, *b)
-	}
-	return out, nil
-}
-
 // projectWithClient is the common prologue: authenticated client + resolved project.
 func projectWithClient(ctx context.Context, arg string) (*api.Client, *api.Project, error) {
 	c, err := client()

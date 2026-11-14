@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -70,13 +69,13 @@ func shareCreateCmd() *cobra.Command {
 	var maxDownloads, maxUploads int64
 	var upload bool
 	c := &cobra.Command{
-		Use:               "create <project> [blob]",
+		Use:               "create <project[:path]>",
 		Short:             i18n.T("cmd.share.create"),
 		Args:              cobra.RangeArgs(1, 2),
-		ValidArgsFunction: completeArgs(completeProjects, completeBlobs, completeNothing),
+		ValidArgsFunction: completeArgs(completeRef, completeBlobs, completeNothing),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// An upload link (inbox) covers the whole project and has its own limits.
-			if upload && (len(args) == 2 || maxDownloads > 0) || !upload && (maxUploads > 0 || maxSize != "") {
+			// An upload link (inbox) takes files into a directory or the project and has its own limits.
+			if upload && maxDownloads > 0 || !upload && (maxUploads > 0 || maxSize != "") {
 				return errors.New(i18n.T("share.upload_flags"))
 			}
 			req := api.CreateShare{Password: password, MaxDownloads: maxDownloads, MaxUploads: maxUploads}
@@ -98,19 +97,24 @@ func shareCreateCmd() *cobra.Command {
 				req.ExpiresIn = int64(d / time.Second)
 			}
 			ctx := cmd.Context()
-			c, p, err := projectWithClient(ctx, args[0])
+			rm, err := newRemote()
+			if err != nil {
+				return err
+			}
+			// What is shared: the project, or the file or directory at a path in it.
+			at := parseRef(args[0])
+			if len(args) == 2 {
+				at = refsOf(args)[0]
+			}
+			p, b, err := rm.find(ctx, at)
 			if err != nil {
 				return err
 			}
 			req.ProjectID = p.ID
-			if len(args) == 2 {
-				blobs, err := resolveBlobs(ctx, c, p.ID, args[1:])
-				if err != nil {
-					return err
-				}
-				req.BlobID = blobs[0].ID
+			if b != nil {
+				req.BlobID = b.ID
 			}
-			s, err := c.CreateShare(ctx, req)
+			s, err := rm.c.CreateShare(ctx, req)
 			if err != nil || jsonOut {
 				return orJSON(err, s)
 			}
@@ -266,7 +270,7 @@ func shareGetCmd() *cobra.Command {
 			if len(args) > 1 {
 				blobs = nil
 				for _, a := range args[1:] {
-					i := slices.IndexFunc(sh.Blobs, func(b api.PublicBlob) bool { return b.ID == a || b.Name == a })
+					i := slices.IndexFunc(sh.Blobs, func(b api.PublicBlob) bool { return b.ID == a || b.Path == cleanRemote(a) || b.Name == a })
 					if i < 0 {
 						return errors.New(i18n.T("blob.not_found", a))
 					}
@@ -276,7 +280,7 @@ func shareGetCmd() *cobra.Command {
 			info("share.opened", sh.Share.Name, sh.Share.Creator, len(sh.Blobs))
 			items := make([]dlItem, 0, len(blobs))
 			for _, b := range blobs {
-				items = append(items, dlItem{ID: b.ID, Name: b.Name, Size: b.Size, url: func(ctx context.Context) (string, error) {
+				items = append(items, dlItem{ID: b.ID, Name: b.Name, Size: b.Size, rel: b.Path, url: func(ctx context.Context) (string, error) {
 					u, err := c.PublicBlobURL(ctx, token, b.ID, access)
 					if err != nil {
 						return "", err
@@ -284,7 +288,7 @@ func shareGetCmd() *cobra.Command {
 					return u.URL, nil
 				}})
 			}
-			return downloadItems(ctx, items, out, true, jobs)
+			return downloadItems(ctx, items, out, true, jobs, 4)
 		},
 	}
 	c.Flags().StringVar(&password, "password", "", i18n.T("flag.share_password"))
@@ -303,9 +307,14 @@ func sharePutCmd() *cobra.Command {
 		Args:              cobra.MinimumNArgs(2),
 		ValidArgsFunction: completeArgs(completeNothing, completeLocalFiles),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			files, err := expandFiles(args[1:])
-			if err != nil {
-				return err
+			// An inbox takes files, not directory trees.
+			var files []upFile
+			for _, a := range args[1:] {
+				fl, _, _, err := localTree(a, false)
+				if err != nil {
+					return err
+				}
+				files = append(files, fl...)
 			}
 			if name != "" && len(files) != 1 {
 				return errors.New(i18n.T("upload.name_multi"))
@@ -334,16 +343,16 @@ func sharePutCmd() *cobra.Command {
 			for i, f := range files {
 				label := name
 				if label == "" {
-					label = filepath.Base(f.path)
+					label = f.name
 				}
 				bar := ui.NewBar(label, f.size, progressEnabled())
-				r, err := transfer.UploadToLink(ctx, c, token, access, f.path, transfer.UploadOptions{Name: name, Jobs: jobs, Progress: bar})
+				r, err := transfer.UploadToLink(ctx, c, token, access, f.local, transfer.UploadOptions{Name: name, Jobs: jobs, Progress: bar})
 				bar.Finish()
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
 				if err != nil {
-					fmt.Fprintln(os.Stderr, i18n.T("error")+f.path+": "+errMessage(err))
+					fmt.Fprintln(os.Stderr, i18n.T("error")+f.local+": "+errMessage(err))
 					failed++
 					// A used-up, expired or deleted link takes nothing more: skip the rest.
 					if api.IsCode(err, "share_exhausted") || api.IsCode(err, "share_expired") || api.IsCode(err, "not_found") {
@@ -425,16 +434,39 @@ func unlockShare(ctx context.Context, c *api.Client, token, password, mode strin
 	return sh, access, nil
 }
 
-// allShareFiles appends the remaining pages of a project share's file list.
+// allShareFiles replaces the first page of a share's listing with all its files, at every
+// level: the remaining pages, and the directories of a project or directory share. Each file's
+// Path is relative to what is shared.
 func allShareFiles(ctx context.Context, c *api.Client, token, access string, sh *api.PublicShare) error {
-	for cursor := sh.NextCursor; cursor != ""; {
-		page, err := c.PublicShare(ctx, token, access, cursor)
-		if err != nil {
-			return err
+	var files []api.PublicBlob
+	var list func(page *api.PublicShare, parentID string) error
+	list = func(page *api.PublicShare, parentID string) error {
+		for {
+			for _, b := range page.Blobs {
+				if b.Kind != "dir" {
+					files = append(files, b)
+					continue
+				}
+				sub, err := c.PublicShareDir(ctx, token, access, b.ID, "")
+				if err != nil {
+					return err
+				}
+				if err := list(sub, b.ID); err != nil {
+					return err
+				}
+			}
+			if page.NextCursor == "" {
+				return nil
+			}
+			var err error
+			if page, err = c.PublicShareDir(ctx, token, access, parentID, page.NextCursor); err != nil {
+				return err
+			}
 		}
-		sh.Blobs = append(sh.Blobs, page.Blobs...)
-		cursor = page.NextCursor
 	}
-	sh.NextCursor = ""
+	if err := list(sh, ""); err != nil {
+		return err
+	}
+	sh.Blobs, sh.NextCursor = files, ""
 	return nil
 }

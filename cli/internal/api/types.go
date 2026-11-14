@@ -70,10 +70,21 @@ type Blob struct {
 }
 
 // BlobPage is one page of a project listing. Total is only reported for the first page.
+// DirInfo is what a directory listing says about the directory (ID nil, Path "" = the root).
+type DirInfo struct {
+	ID      *string `json:"id"`
+	Path    string  `json:"path"`
+	Parents []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"parents"`
+}
+
 type BlobPage struct {
-	Blobs      []Blob `json:"blobs"`
-	Total      *int   `json:"total"`
-	NextCursor string `json:"next_cursor"`
+	Dir        *DirInfo `json:"dir"` // directory listings only
+	Blobs      []Blob   `json:"blobs"`
+	Total      *int     `json:"total"`
+	NextCursor string   `json:"next_cursor"`
 }
 
 type Share struct {
@@ -141,7 +152,9 @@ type PublicShare struct {
 
 type PublicBlob struct {
 	ID          string `json:"id"`
+	Kind        string `json:"kind"` // "file" | "dir"; "" from servers without directories
 	Name        string `json:"name"`
+	Path        string `json:"path"` // relative to what is shared
 	Size        int64  `json:"size"`
 	ContentType string `json:"content_type"`
 	CreatedAt   int64  `json:"created_at"`
@@ -157,6 +170,7 @@ type UploadRequest struct {
 	Size        int64  `json:"size"`
 	ContentType string `json:"content_type"`
 	Overwrite   bool   `json:"overwrite"`
+	ParentID    string `json:"parent_id,omitempty"` // the directory it goes into; "" = the project's root
 }
 
 type UploadInit struct {

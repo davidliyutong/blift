@@ -38,21 +38,40 @@ go test ./... && go vet ./...
 | `blift login [--server URL] [--no-browser] [--token T \| --api-key K]` | 浏览器设备码授权登录；或用 API key（网页「账户设置 → API keys」创建，默认读 `BLIFT_API_KEY`）换取会话；或直接使用令牌 |
 | `blift logout` / `whoami` / `version` | 退出、查看当前用户、版本 |
 | `blift project ls\|create\|info\|rm\|rename\|members\|add-member\|rm-member` | 项目管理（别名 `projects`、`p`） |
-| `blift ls <项目> [--sort name\|size\|time] [--query 文本] [-n 100] [-a]` | 列出文件（默认最多 100 个，`-n/--limit` 调整，`-a/--all` 全部） |
-| `blift upload <项目> <文件>... [--name N] [--overwrite] [-j 4]` | 上传（别名 `up`、`push`） |
-| `blift download <项目> [文件...] [--all] [-o 目录或文件] [-j 4]` | 下载（别名 `dl`、`pull`） |
-| `blift rm <项目> <文件>... [-y]` | 删除文件 |
-| `blift mv <项目> <文件> <新名称>` | 重命名文件 |
-| `blift url <项目> <文件>` | 输出预签名下载链接（1 小时有效） |
-| `blift share create <项目> [文件] [--password P] [--expires 7d] [--max-downloads N]` | 创建分享（不指定文件即分享整个项目）；分享单个文件且不设密码时，还会输出可用于 `wget` / `curl` 的直接下载链接 |
-| `blift share create <项目> --upload [--password P] [--expires 7d] [--max-uploads N] [--max-size 10G]` | 创建收件箱：拿到链接的人都能向项目上传文件，但看不到项目里的任何文件 |
+| `blift ls [项目[:路径]] [-r] [--sort name\|size\|time] [--query 文本] [-n 100] [-a]` | 不带参数时列出你的项目；否则列出该文件夹，文件夹在前（默认最多 100 项，`-n/--limit` 调整，`-a/--all` 全部）；`-r` 列出其下所有文件及路径；`--query` 在整个项目中搜索 |
+| `blift cp [-r] <来源>... <目标> [--overwrite] [-j 4] [-P 4]` | 在本地路径与 `项目:路径` 之间复制：上传和下载，单个文件或整棵目录树（见下文） |
+| `blift mv <项目:路径>... <项目:路径>` | 在项目内移动或重命名，用法同 `mv`（别名 `rename`）；文件夹连同其中所有内容一起移动，瞬间完成 |
+| `blift rm [-r] <项目:路径>... [-y]` | 删除文件；加 `-r` 删除文件夹 |
+| `blift mkdir [-p] <项目:路径>...` | 创建文件夹（`-p`：连同缺少的上级） |
+| `blift tree <项目[:路径]> [-L 层数]` | 以树形显示项目或文件夹 |
+| `blift stat <项目:路径>` / `cat <项目:路径>` | 查看文件或文件夹的详情 / 把文件输出到标准输出 |
+| `blift url <项目:路径>` | 输出预签名下载链接（1 小时有效） |
+| `blift upload <项目[:目录]> <文件>... [-r] [--name N] [--overwrite]` | 上传到项目或文件夹（别名 `up`、`push`）；等同于 `cp <文件>... 项目:目录/` |
+| `blift download <项目[:路径]> [路径...] [-r] [--all] [-o 目录或文件]` | 下载（别名 `dl`、`pull`）；`--all` 下载整个项目 |
+| `blift share create <项目[:路径]> [--password P] [--expires 7d] [--max-downloads N]` | 分享项目、文件夹或单个文件；分享单个文件且不设密码时，还会输出可用于 `wget` / `curl` 的直接下载链接 |
+| `blift share create <项目[:目录]> --upload [--password P] [--expires 7d] [--max-uploads N] [--max-size 10G]` | 创建收件箱：拿到链接的人都能向项目（或该文件夹）上传文件，但看不到里面的任何文件 |
 | `blift share put <收件箱链接或token> <文件>... [--password P] [--name N] [-j 4]` | 免登录通过收件箱链接上传（重名时自动编号） |
 | `blift share ls [项目]` / `share rm <分享ID>` | 列出 / 删除分享（含类型和使用情况） |
-| `blift share get <分享链接或token> [文件...] [--password P] [-o 目录]` | 免登录从分享链接下载（直接下载链接只下载对应的文件） |
+| `blift share get <分享链接或token> [路径...] [--password P] [-o 目录]` | 免登录从分享链接下载：其中的全部内容（含文件夹），或只下载指定的路径（直接下载链接只下载对应的文件） |
 | `blift update [--check] [--version X.Y.Z] [--force]` | 原地更新到最新版本（别名 `upgrade`） |
 
-项目参数可以是 ID、名称或 `所有者/名称`：ID 精确匹配优先；同名时优先自己拥有的项目，仍有歧义则报错并列出候选。
-文件参数可以是文件名或 ID（按名称精确查找，项目再大也只需一次请求）。
+### 路径
+
+项目中的位置写作 `项目:路径`，与 `scp`、`rclone` 相同：`datasets` 或 `datasets:` 是项目本身，
+`datasets:runs/42/model.ckpt` 是文件，`datasets:runs/` 是文件夹。项目可以是 ID、名称或 `所有者/名称`：
+ID 精确匹配优先；同名时优先自己拥有的项目，仍有歧义则报错并列出候选。文件夹最多嵌套 16 层。
+
+`blift cp` 靠这个冒号区分远端和本地，所以文件名里带冒号的本地文件要写成 `./a:b`。规则与 `cp`、`rsync` 一致：
+
+- 目标已经是文件夹、以 `/` 结尾，或有多个来源时，目标就是文件夹：来源以各自的名字放进去，缺少的文件夹会自动创建。
+  否则单个来源会被复制*成那个名字*。
+- 目录需要 `-r`。目录会保留自己的名字；以斜杠结尾则表示“其中的内容”：`cp -r ./photos demo:album` 在还没有
+  `album` 时把 `photos` 建成 `album`，已有时则得到 `album/photos`；`cp -r ./photos/ demo:album/` 总是把
+  `photos` 里的文件直接放进 `album`。
+- 同时传输 `-P` 个文件（默认 4），大文件每个再用 `-j` 个连接；多个文件共用一条进度条。
+- 复制只发生在本机与项目之间。在项目内移动请用 `blift mv`，无论文件夹多大都是瞬间完成。
+
+以项目开头的命令也接受旧写法 `<项目> <路径>...`（`blift rm demo a.txt docs/b.txt`），其中的路径也可以是文件 ID。
 
 ## 更新
 
@@ -62,7 +81,7 @@ go test ./... && go vet ./...
 
 ## Shell 补全
 
-补全项目名、文件名（按已输入的前缀向服务器查询）、分享 ID、成员与用户，以及 `--sort`、`--role`、
+补全项目名，以及冒号之后的路径（逐级补全文件夹，按已输入的前缀向服务器查询）、分享 ID、成员与用户，以及 `--sort`、`--role`、
 `--storage`、`--expires`、`--lang` 等参数值：
 
 ```sh
@@ -80,11 +99,17 @@ blift completion fish > ~/.config/fish/completions/blift.fish
 blift login --server https://files.example.com     # 打开浏览器确认授权
 blift p create datasets -d "训练数据"
 blift up datasets ./model.ckpt ./notes.md -j 8      # >64 MiB 自动分片并行上传
-blift up datasets ./dist                            # 目录：只上传其中的普通文件（不递归）
-blift ls datasets --sort size -n 20                 # 最大的 20 个文件
-blift ls datasets --query ckpt --all                # 名称包含 ckpt 的全部文件
+blift cp -r ./dist datasets:builds/                 # 整棵目录树 → builds/dist/…，同时传 4 个文件
+blift cp ./notes.md datasets:docs/readme.md         # 上传并改名
+blift ls datasets:builds/dist --sort size -n 20     # 该文件夹，从大到小
+blift ls datasets --query ckpt --all                # 项目中名称包含 ckpt 的全部文件
+blift tree datasets -L 2
+blift mv datasets:builds/dist datasets:releases/v1  # 无论多大都瞬间完成
 blift dl datasets model.ckpt -o ~/Downloads/        # >64 MiB 使用并行 Range 下载
-blift dl datasets --all -o ./backup
+blift cp -r datasets:releases ./backup              # 下载文件夹并保持结构
+blift dl datasets --all -o ./backup                 # 整个项目
+blift rm -r datasets:builds -y
+blift share create datasets:releases/v1 --expires 7d
 blift share create datasets model.ckpt --password 1234 --expires 7d
 blift share get https://files.example.com/s/AbCd123 --password 1234 -o .
 wget https://files.example.com/s/XyZ7890/notes.md   # 无需 blift：直接下载链接（未设密码的分享）
@@ -95,5 +120,7 @@ blift --json ls datasets | jq '.[].name'
 
 - 上传：先 `init`，服务器决定单次 PUT（≤ 64 MiB）或分片；分片 URL 每批最多 100 个，按 `-j` 并发上传，每片失败重试 3 次（指数退避），最后带 ETag 列表 `complete`。失败或 Ctrl-C 时调用 `DELETE /api/uploads/:id` 取消。
 - 下载：先写入 `<目标>.part`，成功后改名；失败时删除临时文件。
+- 目录树：先创建文件夹（每个目录一次 `mkdir -p` 请求），再把文件传进去；下载时逐个文件夹列出。空文件夹双向都会保留；
+  指向文件的符号链接会被跟随，其他特殊文件跳过。
 - 多个文件中个别失败时会继续处理其余文件，最后以非零状态退出。
 - 进度条仅在 stderr 为终端且未使用 `-q` 时显示；状态信息写 stderr，表格 / JSON 写 stdout。
