@@ -583,6 +583,7 @@ func (m *browser) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "x":
 		if picked := m.picked(); len(picked) > 0 {
 			m.clip = &clipboard{pane: m.active, path: append([]string{}, p.path...), entries: picked, cut: k.String() == "x"}
+			p.selected = map[string]bool{} // the clipboard has them now
 			m.say(i18n.T(map[bool]string{false: "browse.yanked", true: "browse.cut"}[m.clip.cut], len(picked)), nil)
 		}
 	case "p", "P":
@@ -888,6 +889,18 @@ func fit(s string, w int) string {
 	return s + strings.Repeat(" ", max(0, w-ui.Width(s)))
 }
 
+// fitEnd is fit for paths: when it has to cut, it keeps the end, where the current directory is.
+func fitEnd(s string, w int) string {
+	if ui.Width(s) <= w {
+		return fit(s, w)
+	}
+	r := []rune(s)
+	for len(r) > 0 && ui.Width(string(r)) > w-1 {
+		r = r[1:]
+	}
+	return fit("…"+string(r), w)
+}
+
 // column renders a listing h lines tall and w cells wide, scrolled so the cursor shows.
 func (m *browser) column(l *listing, w, h, cursor int, selected map[string]bool, sizes bool) []string {
 	lines := make([]string, 0, h)
@@ -949,7 +962,7 @@ func (m *browser) View() string {
 		}
 		b.WriteString(st.Render(fmt.Sprintf("%d %s", i+1, pn.fs.label())))
 	}
-	b.WriteString("  " + fit(p.fs.show(p.path), max(0, m.width-28)) + "\n")
+	b.WriteString("  " + fitEnd(p.fs.show(p.path), max(0, m.width-28)) + "\n")
 
 	bottom := 2 + len(m.jobs)
 	h := m.height - 1 - bottom
