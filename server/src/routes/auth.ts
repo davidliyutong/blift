@@ -3,10 +3,12 @@ import { clearSessionCookie, clientName, createSession, NO_EXPIRY, requireUser, 
 import { all, now, one, run, stmt } from "../db";
 import type { AppEnv, UserRow } from "../env";
 import { decrypt, encrypt, hashPassword, sha256Hex, verifyPassword } from "../lib/crypto";
-import { ApiError, conflict, forbidden, notFound, unauthorized } from "../lib/errors";
+import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from "../lib/errors";
 import { body, int, password, str } from "../lib/http";
-import { newApiKey, newId } from "../lib/ids";
+import { DAV_PASSWORD_PREFIX, newApiKey, newDavPassword, newId } from "../lib/ids";
 import { newTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
+import { toDavPassword, type DavPassword } from "../services/dav";
+import { loadProject } from "../services/projects";
 import { getSettings } from "../services/settings";
 import { toUser } from "../services/users";
 
@@ -255,6 +257,64 @@ r.delete("/api-keys/:id", async (c) => {
     stmts.push(stmt(db, "DELETE FROM sessions WHERE api_key_id = ? AND user_id = ?", id, u.id));
   const [res] = await db.batch(stmts);
   if (!res.meta.changes) throw notFound("API key");
+  return c.body(null, 204);
+});
+
+// ---- WebDAV passwords: what WebDAV clients sign in with (see services/dav.ts)
+
+r.get("/dav-passwords", async (c) => {
+  const u = requireUser(c);
+  const rows = await all<DavPassword & { project_name: string | null }>(
+    c.env.DB,
+    `SELECT d.*, p.name AS project_name FROM dav_passwords d LEFT JOIN projects p ON p.id = d.project_id AND p.status = 'active'
+     WHERE d.user_id = ? ORDER BY d.created_at DESC`,
+    u.id,
+  );
+  return c.json({ dav_passwords: rows.map(toDavPassword) });
+});
+
+r.post("/dav-passwords", async (c) => {
+  const u = requireUser(c);
+  const b = await body(c);
+  const name = str(b.name, "name", 100);
+  const projectId = b.project_id ? (await loadProject(c, str(b.project_id, "project_id", 64), "viewer")).id : null;
+  // The user's own password (10+ characters, it guards files), or a generated one.
+  const chosen = b.password == null || b.password === "" ? null : String(b.password);
+  if (chosen !== null && (chosen.length < 10 || chosen.length > 128 || chosen.startsWith(DAV_PASSWORD_PREFIX)))
+    throw badRequest("password must be 10-128 characters");
+  if ((await one<{ n: number }>(c.env.DB, "SELECT COUNT(*) AS n FROM dav_passwords WHERE user_id = ?", u.id))!.n >= 20)
+    throw badRequest("at most 20 WebDAV passwords");
+  const secret = chosen ?? newDavPassword();
+  const row: DavPassword = {
+    id: newId(),
+    user_id: u.id,
+    name,
+    secret_hash: chosen ? await hashPassword(chosen) : await sha256Hex(secret),
+    generated: chosen ? 0 : 1,
+    project_id: projectId,
+    readonly: b.readonly === true ? 1 : 0,
+    last_used_at: null,
+    created_at: now(),
+  };
+  await run(
+    c.env.DB,
+    "INSERT INTO dav_passwords (id, user_id, name, secret_hash, generated, project_id, readonly, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    row.id,
+    row.user_id,
+    row.name,
+    row.secret_hash,
+    row.generated,
+    row.project_id,
+    row.readonly,
+    row.created_at,
+  );
+  // A generated password is shown this once; a chosen one is not echoed.
+  return c.json({ ...toDavPassword(row), username: u.username, ...(chosen ? {} : { password: secret }) }, 201);
+});
+
+r.delete("/dav-passwords/:id", async (c) => {
+  const u = requireUser(c);
+  if (!(await run(c.env.DB, "DELETE FROM dav_passwords WHERE id = ? AND user_id = ?", c.req.param("id"), u.id))) throw notFound("WebDAV password");
   return c.body(null, 204);
 });
 

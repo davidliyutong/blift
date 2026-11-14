@@ -41,6 +41,8 @@ type UploadOpts = {
   overwrite: boolean;
   uploaderId: string | null;
   viaInbox: boolean;
+  /** Always one PUT, whatever the size (WebDAV relays the request body; S3 takes up to 5 GiB). */
+  single?: boolean;
 };
 
 /** The active blob called `name` in a directory, if any. */
@@ -78,7 +80,7 @@ export async function startUpload(c: Ctx, p: Pick<ProjectRow, "id" | "owner_id" 
   const id = newId();
   const key = objectKey(storage, p.id, id);
   const expires_at = now() + UPLOAD_TTL * 1000;
-  const multipart = o.size > SINGLE_MAX;
+  const multipart = !o.single && o.size > SINGLE_MAX;
   const partSize = multipart ? partSizeFor(o.size) : null;
   const uploadId = multipart ? await s3.createMultipart(key, o.contentType) : null;
 

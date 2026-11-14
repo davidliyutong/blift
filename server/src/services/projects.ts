@@ -3,7 +3,7 @@ import { all, chunks, now, one, placeholders, stmt, type DB, type Stmt } from ".
 import type { Ctx } from "../env";
 import { b64decode, b64encode } from "../lib/crypto";
 import { badRequest, forbidden, notFound } from "../lib/errors";
-import { likeArg } from "../lib/http";
+import { likeArg, publicOrigin } from "../lib/http";
 import { userRef } from "./users";
 
 export type MemberRole = "owner" | "editor" | "viewer";
@@ -17,6 +17,7 @@ export type ProjectRow = {
   storage_id: string;
   used_bytes: number;
   blob_count: number;
+  webdav_enabled: number;
   status: "active" | "deleting";
   created_at: number;
   updated_at: number;
@@ -36,6 +37,10 @@ export const PROJECT_SELECT = `
   LEFT JOIN users o ON o.id = p.owner_id
   LEFT JOIN storages st ON st.id = p.storage_id`;
 
+/** Path of a WebDAV collection: /dav/<owner>/<project>/<directory>…/, each name percent-encoded. */
+export const davHref = (segs: string[], collection = true) =>
+  `/dav${segs.map((s) => `/${encodeURIComponent(s)}`).join("")}${collection ? "/" : ""}`;
+
 export function toProject(c: Ctx, p: ProjectRow) {
   return {
     id: p.id,
@@ -48,6 +53,8 @@ export function toProject(c: Ctx, p: ProjectRow) {
     storage_location: p.storage_location ?? "",
     used_bytes: p.used_bytes,
     blob_count: p.blob_count,
+    webdav_enabled: !!p.webdav_enabled,
+    webdav_url: `${publicOrigin(c)}${davHref([p.owner_username ?? "", p.name])}`,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };

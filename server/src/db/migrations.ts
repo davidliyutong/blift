@@ -238,6 +238,29 @@ CREATE INDEX blobs_dir_size ON blobs(project_id, parent_id, kind, size, id) WHER
 CREATE INDEX blobs_gc_dirs ON blobs(updated_at) WHERE status = 'deleted' AND kind = 'dir';
 `,
   },
+  {
+    // WebDAV: a project answers at /dav/<owner>/<project>/ once its owner turns it on. Clients
+    // sign in with the username and a WebDAV password, never the account password. A generated
+    // password is random, so only its SHA-256 is kept (one lookup per request); one the user
+    // chose is hashed like an account password.
+    name: "0008_webdav",
+    sql: `
+ALTER TABLE projects ADD COLUMN webdav_enabled INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE dav_passwords (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  secret_hash TEXT NOT NULL,
+  generated INTEGER NOT NULL,
+  project_id TEXT,
+  readonly INTEGER NOT NULL DEFAULT 0,
+  last_used_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX dav_passwords_user ON dav_passwords(user_id);
+CREATE INDEX dav_passwords_hash ON dav_passwords(secret_hash);
+`,
+  },
 ];
 
 const split = (sql: string) =>

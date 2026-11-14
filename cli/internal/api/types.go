@@ -34,6 +34,8 @@ type Project struct {
 	StorageLocation string  `json:"storage_location"` // the backend's location label, "" when not set
 	UsedBytes       int64   `json:"used_bytes"`
 	BlobCount       int64   `json:"blob_count"`
+	WebDAVEnabled   bool    `json:"webdav_enabled"`
+	WebDAVURL       string  `json:"webdav_url"`
 	CreatedAt       int64   `json:"created_at"`
 	UpdatedAt       int64   `json:"updated_at"`
 }

@@ -6,6 +6,7 @@ import type {
   Blob,
   BlobPage,
   CliLoginRequest,
+  DavPassword,
   Info,
   Member,
   Project,
@@ -52,6 +53,11 @@ export const api = {
     apiKeys: () => http.get<{ api_keys: ApiKey[] }>("/api/auth/api-keys"),
     createApiKey: (body: { name: string; max_uses?: number | null; expires_in?: number | null; session_ttl?: number | null }) =>
       http.post<ApiKey & { key: string }>("/api/auth/api-keys", body),
+    davPasswords: () => http.get<{ dav_passwords: DavPassword[] }>("/api/auth/dav-passwords"),
+    /** Without `password` the server generates one and returns it, this once. */
+    createDavPassword: (body: { name: string; password?: string; project_id?: string; readonly?: boolean }) =>
+      http.post<DavPassword & { username: string; password?: string }>("/api/auth/dav-passwords", body),
+    deleteDavPassword: (id: string) => http.del(`/api/auth/dav-passwords/${enc(id)}`),
     deleteApiKey: (id: string, revokeSessions: boolean) =>
       http.del(`/api/auth/api-keys/${enc(id)}${qs({ revoke_sessions: revokeSessions ? 1 : undefined })}`),
   },
@@ -70,7 +76,7 @@ export const api = {
     create: (body: { name: string; description?: string; storage_id?: string }) =>
       http.post<Project>("/api/projects", body),
     get: (id: string) => http.get<Project>(`/api/projects/${enc(id)}`),
-    update: (id: string, body: { name?: string; description?: string }) =>
+    update: (id: string, body: { name?: string; description?: string; webdav_enabled?: boolean }) =>
       http.patch<Project>(`/api/projects/${enc(id)}`, body),
     remove: (id: string) => http.del(`/api/projects/${enc(id)}`),
     members: (id: string) => http.get<{ members: Member[] }>(`/api/projects/${enc(id)}/members`),

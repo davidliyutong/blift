@@ -71,6 +71,8 @@ type Project = {
   storage_id: string; storage_name: string;
   storage_location: string;              // the backend's location label ("" when not set)
   used_bytes: number; blob_count: number;
+  webdav_enabled: boolean;               // see "WebDAV"
+  webdav_url: string;                    // <public origin>/dav/<owner>/<project>/
   created_at: number; updated_at: number;
 };
 
@@ -149,6 +151,9 @@ Errors: `setup_done`, `invalid_secret`, `not_configured` (server has no `BOOTSTR
 | GET | `/api/auth/api-keys` | – | `{api_keys: ApiKey[]}` |
 | POST | `/api/auth/api-keys` | `{name, max_uses?, expires_in?, session_ttl?}` | `ApiKey & {key}` (201) |
 | DELETE | `/api/auth/api-keys/:id?revoke_sessions=1` | – | 204 |
+| GET | `/api/auth/dav-passwords` | – | `{dav_passwords: DavPassword[]}` |
+| POST | `/api/auth/dav-passwords` | `{name, password?, project_id?, readonly?}` | `DavPassword & {username, password?}` (201) |
+| DELETE | `/api/auth/dav-passwords/:id` | – | 204 |
 
 A session whose user has TOTP enabled starts in *pending MFA* state (both local password
 login and OIDC login). While pending, every endpoint except `/api/auth/mfa`, `/api/auth/me`
@@ -240,7 +245,7 @@ set), shown when users pick the backend of a new project (`storage_id` in `POST 
 | GET | `/api/projects` | – | `{projects: Project[]}` (all projects the caller is a member of) |
 | POST | `/api/projects` | `{name, description?, storage_id?}` | `Project` (201) |
 | GET | `/api/projects/:id` | – | `Project` |
-| PATCH | `/api/projects/:id` | `{name?, description?}` | `Project` (owner) |
+| PATCH | `/api/projects/:id` | `{name?, description?, webdav_enabled?}` | `Project` (owner) |
 | DELETE | `/api/projects/:id` | – | 204 (owner or admin; objects are removed asynchronously by GC) |
 | GET | `/api/projects/:id/members` | – | `{members: [{user: UserRef & {email}, role, created_at}]}` |
 | POST | `/api/projects/:id/members` | `{user: "<username or email>", role: "editor"\|"viewer"}` | member (owner) |
@@ -438,6 +443,59 @@ that has started may finish after the link expires. A file counts towards the li
 completes. Errors: `not_found` (unknown link, not an upload link, or a wrong upload token),
 `invalid_password` (403, locked), `share_expired`, `share_exhausted` (a limit is used up),
 `upload_too_large` (the file is larger than the size left), `quota_exceeded` (owner's quota).
+
+## WebDAV
+
+A project whose owner sets `webdav_enabled` is a WebDAV collection at `Project.webdav_url`,
+`<public origin>/dav/<owner>/<project>/`; its directories and files follow by path
+(`…/dav/alice/papers/zotero/ABCD.zip`). `/dav/` lists the owners and `/dav/<owner>/` the projects
+the caller can reach. A project with WebDAV off answers `404`.
+
+**Sign-in** is HTTP Basic with the username and a **WebDAV password**, never the account password
+(no second factor is asked for; the user created the password while signed in):
+
+```ts
+type DavPassword = {
+  id: string; name: string;
+  generated: boolean;             // made by the server rather than chosen by the user
+  project_id: string | null;      // only this project; null = every project with WebDAV on
+  project_name: string | null;
+  readonly: boolean;              // cannot change anything
+  last_used_at: number | null; created_at: number;
+};
+```
+`POST /api/auth/dav-passwords` without `password` generates one (`bliftd_<24 base62 chars>`) and
+returns it in `password`, this once; only its SHA-256 is stored. With `password` (10–128
+characters) the user's own is stored hashed and not returned. At most 20 per user. What a
+password may do is what the user may do in the project (viewers read), less when it is
+`readonly` or limited to a project. Deleting one ends its access at once. Requests without valid
+credentials get `401` with `WWW-Authenticate: Basic`; `OPTIONS` needs none.
+
+**Protocol**: RFC 4918 class 1 (`DAV: 1`, no locking).
+
+| Method | Notes |
+| --- | --- |
+| `OPTIONS` | `200`, `DAV: 1`, `Allow` |
+| `PROPFIND` | `Depth: 0` or `1` (`infinity` → `403`); `207` with `displayname`, `resourcetype`, `getcontentlength`, `getcontenttype`, `getetag` (files), `getlastmodified`, `creationdate`, whatever the body asks for. Entries come by name; a directory of any size is streamed. |
+| `GET`, `HEAD` | The file, with `ETag`, `Last-Modified`, `Range` support, `If-Match` / `If-None-Match`. `404` when missing. |
+| `PUT` | `201` created, `204` replaced, with the new `ETag`. `409` when the parent does not exist, `405` on a directory, `412` for a failed `If-Match` / `If-None-Match: *`, `507` over quota. |
+| `DELETE` | `204`; a directory goes with everything in it (see "Directories"). |
+| `MKCOL` | `201` (exactly); `405` when the name exists, `409` without the parent. |
+| `MOVE`, `COPY` | `Destination` in the same project, `Overwrite: T` (default) or `F`. `201` created, `204` replaced, `412` when the destination exists and `Overwrite` is `F`, `409` without the destination's parent. A move is one write whatever a directory holds; a copy is one storage request per file and takes at most 25 files (`507` beyond). The entity tags of an `If` header are checked. |
+| `PROPPATCH` | Accepted (`207`), nothing is stored. |
+| `LOCK`, `UNLOCK` | `405` |
+
+- A file's `ETag` is its blob id in quotes: every upload makes a new blob, so it is strong and
+  changes exactly when the content does. Directories have none; their `getlastmodified` changes
+  whenever something directly in them is added, replaced, moved or deleted.
+- **File bytes pass through the server here**, unlike everywhere else: a WebDAV client can only
+  talk to the URL it was given. Bodies are streamed. On Cloudflare Workers a request body is
+  limited to 100 MB (the platform answers `413`); the Node server has no limit below S3's 5 GiB
+  for one PUT. A `PUT` without `Content-Length` is accepted up to 16 MiB (`411` beyond).
+- Files written over WebDAV are ordinary blobs (`uploader` = the user); usage and stats count as
+  for any upload or download.
+- Built for, and tested against the request sequences of, Zotero's file sync and OmniFocus
+  (OmniDAV's conformance tests).
 
 ## Admin (role = admin)
 

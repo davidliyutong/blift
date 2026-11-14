@@ -12,6 +12,14 @@ All notable changes are documented here. The format follows
   folders, upload a folder (picker or drag and drop; its structure is kept), move files and
   folders, share a folder as a download link or an inbox, and browse shared folders on the share
   page. Search still covers the whole project and shows where each file is.
+- **WebDAV.** A project's owner can turn WebDAV on in its settings; the project is then at
+  `/dav/<owner>/<project>/` for Zotero, OmniFocus, file managers and other WebDAV clients. They
+  sign in with the username and a WebDAV password from Account → WebDAV passwords (generated or
+  your own, optionally limited to one project or to reading), never the account password.
+  Supports PROPFIND, GET with ranges, PUT, DELETE, MKCOL, MOVE and COPY (class 1, no locking).
+  Files uploaded this way pass through the server: on Cloudflare Workers they are limited to
+  100 MB each. Deployments on Workers need `/dav` and `/dav/*` in `run_worker_first` (see
+  `server/wrangler.toml`; `make cf-config` writes it).
 - Folders in the CLI. Places are written `project:path` (`demo:docs/a.pdf`), as with scp and
   rclone. New commands: `blift cp` (uploads and downloads, `-r` for whole trees, `-P` files at
   a time), `mkdir [-p]`, `tree`, `stat` and `cat`. `ls` lists a folder (`-r` for everything

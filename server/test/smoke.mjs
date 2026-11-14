@@ -607,6 +607,134 @@ assert.equal(await errCode(api("GET", `/api/public/shares/${ibToken}`, undefined
 assert.equal(await errCode(api("POST", `/api/public/shares/${ibToken}/uploads/${ibb.blob_id}/complete`, {}, { auth: null, headers: wrongTok, expect: 404 })), "not_found");
 step("upload links: password, single + multipart, auto-rename, nothing to download, upload tokens, file/size limits, delete");
 
+// WebDAV: Basic sign-in with a WebDAV password, the requests Zotero and OmniFocus make.
+const wp = await api("POST", "/api/projects", { name: "dav" }, { expect: 201 });
+assert.deepEqual([wp.webdav_enabled, wp.webdav_url], [false, `${BASE}/dav/admin/dav/`]);
+const davPw = await api("POST", "/api/auth/dav-passwords", { name: "zotero" }, { expect: 201 });
+assert.match(davPw.password, /^bliftd_[0-9A-Za-z]{24}$/);
+assert.deepEqual([davPw.username, davPw.generated, davPw.project_id, davPw.readonly], ["admin", true, null, false]);
+const basic = (user, pw) => `Basic ${Buffer.from(`${user}:${pw}`).toString("base64")}`;
+let davAuth = basic("admin", davPw.password);
+let davUploads = 0;
+let davBytes = 0;
+const dav = async (method, path, { body, headers = {}, auth = davAuth } = {}) => {
+  const res = await fetch(`${BASE}/dav${path}`, { method, body, headers: { ...(auth ? { authorization: auth } : {}), ...headers }, redirect: "manual" });
+  if (method === "PUT" && res.status < 300) {
+    davUploads++;
+    davBytes += body?.length ?? 0;
+  }
+  return res;
+};
+const hrefs = (xml) => [...xml.matchAll(/<D:href>([^<]*)<\/D:href>/g)].map((m) => m[1]);
+const prop = (xml, name) => xml.match(new RegExp(`<D:${name}>([^<]*)</D:${name}>`))?.[1];
+// Sign-in: OPTIONS needs none; anything else answers 401 with a Basic davChallenge.
+const davOpts = await dav("OPTIONS", "/admin/dav/", { auth: null });
+assert.deepEqual([davOpts.status, davOpts.headers.get("dav")], [200, "1"]);
+const davChallenge = await dav("PROPFIND", "/admin/dav/", { auth: null, headers: { depth: "0" } });
+assert.equal(davChallenge.status, 401);
+assert.match(davChallenge.headers.get("www-authenticate"), /^Basic realm=/);
+assert.equal((await dav("PROPFIND", "/", { auth: basic("admin", "password123"), headers: { depth: "0" } })).status, 401); // not the account password
+assert.equal((await dav("PROPFIND", "/", { auth: basic("admin", "bliftd_wrongwrongwrongwrongwron"), headers: { depth: "0" } })).status, 401);
+// A project is not there until its owner turns WebDAV on.
+assert.equal((await dav("PROPFIND", "/admin/dav/", { headers: { depth: "0" } })).status, 404);
+assert.equal((await api("PATCH", `/api/projects/${wp.id}`, { webdav_enabled: true })).webdav_enabled, true);
+assert.deepEqual(hrefs(await (await dav("PROPFIND", "/", { headers: { depth: "1" } })).text()), ["/dav/", "/dav/admin/"]);
+assert.deepEqual(hrefs(await (await dav("PROPFIND", "/admin/", { headers: { depth: "1" } })).text()), ["/dav/admin/", "/dav/admin/dav/"]);
+assert.equal((await dav("PROPFIND", "/admin/dav/")).status, 403); // Depth: infinity
+// Zotero's "Verify Server", then a sync: MKCOL must answer 201, a missing file 404.
+const Z = "/admin/dav/zotero";
+assert.equal((await dav("PROPFIND", `${Z}/`, { headers: { depth: "0" } })).status, 404);
+assert.equal((await dav("PROPFIND", "/admin/dav/", { headers: { depth: "0" } })).status, 207);
+assert.equal((await dav("MKCOL", `${Z}/`)).status, 201);
+assert.equal((await dav("MKCOL", `${Z}/`)).status, 405);
+assert.equal((await dav("MKCOL", `${Z}/a/b/`)).status, 409);
+const zroot = await dav("PROPFIND", `${Z}/`, { headers: { depth: "0", "content-type": "text/xml; charset=utf-8" }, body: "<propfind xmlns='DAV:'><prop><getcontentlength/></prop></propfind>" });
+assert.equal(zroot.status, 207);
+assert.match(zroot.headers.get("content-type"), /xml/);
+assert.equal((await dav("GET", `${Z}/nonexistent.prop`)).status, 404);
+assert.equal((await dav("PUT", `${Z}/zotero-test-file.prop`, { body: Buffer.from(" ") })).status, 201);
+const zget = await dav("GET", `${Z}/zotero-test-file.prop`);
+assert.deepEqual([zget.status, await zget.text()], [200, " "]);
+assert.equal((await dav("DELETE", `${Z}/zotero-test-file.prop`)).status, 204);
+assert.equal((await dav("DELETE", `${Z}/zotero-test-file.prop`)).status, 404);
+const davZip = randomBytes(300_000);
+const propXml = Buffer.from('<properties version="1"><mtime>1700000000000</mtime><hash>abc</hash></properties>');
+assert.equal((await dav("PUT", `${Z}/ABCD2345.zip`, { body: davZip, headers: { "content-type": "application/zip" } })).status, 201);
+assert.equal((await dav("PUT", `${Z}/ABCD2345.prop`, { body: propXml, headers: { "content-type": "text/xml" } })).status, 201);
+assert.equal((await dav("PUT", `${Z}/ABCD2345.prop`, { body: propXml, headers: { "content-type": "text/xml" } })).status, 204); // davReplaced
+assert.ok(Buffer.from(await (await dav("GET", `${Z}/ABCD2345.zip`)).arrayBuffer()).equals(davZip));
+const zlist = await (await dav("PROPFIND", `${Z}/`, { headers: { depth: "1" }, body: "<propfind xmlns='DAV:'><prop><getlastmodified/></prop></propfind>" })).text();
+assert.deepEqual(hrefs(zlist), ["/dav/admin/dav/zotero/", "/dav/admin/dav/zotero/ABCD2345.prop", "/dav/admin/dav/zotero/ABCD2345.zip"]);
+assert.ok(!Number.isNaN(Date.parse(prop(zlist, "getlastmodified"))));
+// The files are ordinary files of the project.
+assert.deepEqual((await api("GET", `/api/projects/${wp.id}/blobs?path=zotero&sort=name&order=asc`)).blobs.map((b) => [b.name, b.size]), [["ABCD2345.prop", propXml.length], ["ABCD2345.zip", davZip.length]]);
+// GET: ETag, conditional requests, ranges; HEAD; bytes come back as they went in.
+const davHead = await dav("HEAD", `${Z}/ABCD2345.zip`);
+const davEtag = davHead.headers.get("etag");
+assert.deepEqual([davHead.status, davHead.headers.get("content-length"), davHead.headers.get("content-type")], [200, String(davZip.length), "application/zip"]);
+assert.equal((await dav("GET", `${Z}/ABCD2345.zip`, { headers: { "if-none-match": davEtag } })).status, 304);
+const davRanged = await dav("GET", `${Z}/ABCD2345.zip`, { headers: { range: "bytes=10-19" } });
+assert.deepEqual([davRanged.status, Buffer.from(await davRanged.arrayBuffer()).equals(davZip.subarray(10, 20))], [206, true]);
+assert.equal((await dav("PUT", `${Z}/ABCD2345.zip`, { body: davZip, headers: { "if-match": '"stale"' } })).status, 412);
+assert.equal((await dav("PUT", `${Z}/ABCD2345.zip`, { body: davZip, headers: { "if-none-match": "*" } })).status, 412);
+assert.equal((await dav("PUT", `${Z}/ABCD2345.zip`, { body: davZip, headers: { "if-match": davEtag } })).status, 204);
+assert.notEqual((await dav("HEAD", `${Z}/ABCD2345.zip`)).headers.get("etag"), davEtag); // a new upload, a new ETag
+// A body too large to buffer is streamed to the storage (the 100 MiB file of the upload tests).
+assert.equal((await dav("PUT", "/admin/dav/big.bin", { body: big })).status, 201);
+assert.equal((await api("GET", `/api/projects/${wp.id}/stat?path=big.bin`)).size, big.length);
+assert.equal(sha(Buffer.from(await (await dav("GET", "/admin/dav/big.bin")).arrayBuffer())), sha(big));
+// OmniFocus (OmniDAV's conformance tests): names with spaces, MOVE and COPY with Overwrite, a
+// Date header, and a collection's modification date following what happens in it.
+const O = "/admin/dav/omni%20tests%20";
+for (const d of ["", "/parent", "/parent/tmp", "/parent/doc", "/parent/tmp/doc"]) assert.equal((await dav("MKCOL", `${O}${d}/`)).status, 201);
+await dav("PUT", `${O}/parent/doc/contents`, { body: Buffer.from("old") });
+await dav("PUT", `${O}/parent/tmp/doc/contents`, { body: Buffer.from("new") });
+const davBefore = await dav("PROPFIND", `${O}/parent/`, { headers: { depth: "0" } });
+assert.ok(davBefore.headers.get("date"));
+const modifiedBefore = prop(await davBefore.text(), "getlastmodified");
+await new Promise((r) => setTimeout(r, 1100));
+const abs = (p) => `${BASE}/dav${p}`;
+const davReplaced = await dav("MOVE", `${O}/parent/tmp/doc/`, { headers: { destination: abs(`${O}/parent/doc/`), overwrite: "T" } });
+assert.equal(davReplaced.status, 204);
+assert.equal(await (await dav("GET", `${O}/parent/doc/contents`)).text(), "new");
+const davAfter = await dav("PROPFIND", `${O}/parent/`, { headers: { depth: "0" } });
+assert.ok(Date.parse(davAfter.headers.get("date")) > Date.parse(davBefore.headers.get("date")), "the Date header moves forward");
+assert.notEqual(prop(await davAfter.text(), "getlastmodified"), modifiedBefore, "replacing a child changes the collection's date");
+await dav("PUT", `${O}/a`, { body: Buffer.from("A") });
+await dav("PUT", `${O}/b`, { body: Buffer.from("B") });
+const davMoved = await dav("MOVE", `${O}/a`, { headers: { destination: abs(`${O}/c`), overwrite: "F" } });
+assert.deepEqual([davMoved.status, davMoved.headers.get("location")], [201, "/dav/admin/dav/omni%20tests%20/c"]);
+assert.equal((await dav("MOVE", `${O}/b`, { headers: { destination: abs(`${O}/c`), overwrite: "F" } })).status, 412);
+assert.equal((await dav("MOVE", `${O}/b`, { headers: { destination: abs(`${O}/missing/file`), overwrite: "F" } })).status, 409);
+assert.equal((await dav("MOVE", `${O}/b`, { headers: { destination: abs(`${O}/missing/deeper/file`), overwrite: "F" } })).status, 409);
+assert.equal((await dav("MOVE", `${O}/parent/`, { headers: { destination: abs(`${O}/parent/doc/inside/`) } })).status, 400); // into itself
+assert.equal((await dav("COPY", `${O}/c`, { headers: { destination: abs(`${O}/copy`), overwrite: "F" } })).status, 201);
+assert.equal(await (await dav("GET", `${O}/copy`)).text(), "A");
+assert.equal((await dav("COPY", `${O}/parent/`, { headers: { destination: abs(`${O}/parent2/`), overwrite: "F" } })).status, 201);
+assert.equal(await (await dav("GET", `${O}/parent2/doc/contents`)).text(), "new");
+assert.equal((await dav("COPY", `${O}/parent/`, { headers: { destination: abs(`${O}/parent2/`), overwrite: "F" } })).status, 412);
+const gz = Buffer.from("1f8b0800000000000003cb48cdc9c907008628a61005000000", "hex"); // stays compressed
+await dav("PUT", `${O}/file`, { body: gz });
+const gzBack = await dav("GET", `${O}/file`);
+assert.deepEqual([gzBack.headers.get("content-encoding"), Buffer.from(await gzBack.arrayBuffer()).equals(gz)], [null, true]);
+assert.equal((await dav("DELETE", `${O}/`)).status, 204);
+assert.equal((await dav("PROPFIND", `${O}/`, { headers: { depth: "0" } })).status, 404);
+// Passwords: one the user chose, limited to a project and to reading; deleting one ends it.
+assert.equal(await errCode(api("POST", "/api/auth/dav-passwords", { name: "short", password: "tooshort" }, { expect: 400 })), "bad_request");
+const ro = await api("POST", "/api/auth/dav-passwords", { name: "reader", password: "correct horse battery", project_id: wp.id, readonly: true }, { expect: 201 });
+assert.deepEqual([ro.password, ro.generated, ro.project_id, ro.readonly], [undefined, false, wp.id, true]);
+const roAuth = basic("ADMIN", "correct horse battery"); // usernames are case-insensitive
+assert.equal((await dav("GET", `${Z}/ABCD2345.prop`, { auth: roAuth })).status, 200);
+assert.equal((await dav("PUT", `${Z}/x`, { auth: roAuth, body: Buffer.from("x") })).status, 403);
+assert.equal((await dav("DELETE", `${Z}/ABCD2345.prop`, { auth: roAuth })).status, 403);
+assert.equal((await dav("GET", `${Z}/ABCD2345.prop`, { auth: basic("admin", "correct horse battery!") })).status, 401);
+assert.deepEqual((await api("GET", "/api/auth/dav-passwords")).dav_passwords.map((d) => [d.name, d.project_name]), [["reader", "dav"], ["zotero", null]]);
+await api("DELETE", `/api/auth/dav-passwords/${ro.id}`, undefined, { expect: 204 });
+assert.equal((await dav("GET", `${Z}/ABCD2345.prop`, { auth: roAuth })).status, 401);
+await api("PATCH", `/api/projects/${wp.id}`, { webdav_enabled: false });
+assert.equal((await dav("PROPFIND", "/admin/dav/", { headers: { depth: "0" } })).status, 404);
+step(`WebDAV: sign-in, Zotero's server check and sync, ranges and ETags, a streamed 100 MiB PUT, OmniFocus' MOVE/COPY checks (${davUploads} uploads)`);
+
 // Members
 const second = await api("POST", "/api/projects", { name: "demo2" }, { auth: tok.token, expect: 201 });
 await api("DELETE", `/api/projects/${second.id}`, undefined, { auth: tok.token, expect: 204 });
@@ -645,6 +773,7 @@ await api("DELETE", `/api/projects/${lp.id}`, undefined, { expect: 204 }); // re
 await api("DELETE", `/api/projects/${ib.id}`, undefined, { expect: 204 });
 await api("DELETE", `/api/projects/${elsewhere.id}`, undefined, { expect: 204 });
 await api("DELETE", `/api/projects/${tp.id}`, undefined, { expect: 204 });
+await api("DELETE", `/api/projects/${wp.id}`, undefined, { expect: 204 });
 const treeBytes = 4 + 5 + 2 + 6 + 4; // the five uploads of the directories section
 const inboxBytes = 3 * report.length + big.length; // report.pdf, report (1).pdf, big.bin, one.txt
 const stats = await api("GET", "/api/admin/stats?days=7");
@@ -653,8 +782,8 @@ const today = stats.series.at(-1);
 const listingBytes = names.reduce((n, x) => n + Buffer.byteLength(x), 0);
 assert.ok(
   today.requests > 20 &&
-    today.uploads === 3 + names.length + 4 + 5 &&
-    today.upload_bytes === small.length + big.length + small2.length + listingBytes + inboxBytes + treeBytes,
+    today.uploads === 3 + names.length + 4 + 5 + davUploads &&
+    today.upload_bytes === small.length + big.length + small2.length + listingBytes + inboxBytes + treeBytes + davBytes,
   JSON.stringify(today),
 );
 const users = await api("GET", "/api/admin/users");
