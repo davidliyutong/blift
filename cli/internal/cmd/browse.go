@@ -157,7 +157,11 @@ func (s *remoteSide) list(ctx context.Context, path []string) ([]entry, error) {
 		for i := range projects {
 			p := &projects[i]
 			s.projects[projectLabel(p)] = p
-			out = append(out, entry{name: projectLabel(p), dir: true, size: p.UsedBytes, mtime: p.UpdatedAt, id: p.ID, note: p.Role})
+			note := p.Role
+			if p.StorageStatus == "disabled" {
+				note += " " + i18n.T("project.storage_disabled")
+			}
+			out = append(out, entry{name: projectLabel(p), dir: true, size: p.UsedBytes, mtime: p.UpdatedAt, id: p.ID, note: note})
 		}
 		s.mu.Unlock()
 		sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].name) < strings.ToLower(out[j].name) })
