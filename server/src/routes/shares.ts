@@ -5,7 +5,7 @@ import { isSecure, requireUser } from "../auth";
 import { all, now, one, run } from "../db";
 import type { AppEnv, Ctx } from "../env";
 import { hashPassword, verifyPassword } from "../lib/crypto";
-import { ApiError, badRequest, forbidden, notFound } from "../lib/errors";
+import { ApiError, badRequest, forbidden, notFound, storageDisabled } from "../lib/errors";
 import { body, int, isLinkPreview, publicOrigin, str, wantsPage } from "../lib/http";
 import { newId, newShareToken } from "../lib/ids";
 import { signJwt, verifyJwt } from "../lib/jwt";
@@ -39,6 +39,7 @@ type ShareRow = {
   project_name: string;
   project_description: string;
   project_storage_id: string;
+  storage_status: string;
   owner_id: string;
   owner_status: string | null;
   project_blob_count: number;
@@ -52,12 +53,13 @@ type ShareRow = {
 };
 
 const SHARE_SELECT = `
-  SELECT s.*, p.name AS project_name, p.description AS project_description, p.storage_id AS project_storage_id,
+  SELECT s.*, p.name AS project_name, p.description AS project_description, p.storage_id AS project_storage_id, st.status AS storage_status,
          p.owner_id, p.blob_count AS project_blob_count, p.used_bytes AS project_used_bytes, o.status AS owner_status,
          b.name AS blob_name, b.size AS blob_size, b.kind AS blob_kind, b.parent_id AS blob_parent_id,
          u.username AS creator_username, u.display_name AS creator_display_name
   FROM shares s
   JOIN projects p ON p.id = s.project_id AND p.status = 'active'
+  JOIN storages st ON st.id = p.storage_id AND st.status != 'deleting'
   LEFT JOIN users o ON o.id = p.owner_id
   LEFT JOIN blobs b ON b.id = s.blob_id
   LEFT JOIN users u ON u.id = s.creator_id`;
@@ -196,6 +198,7 @@ async function loadShare(c: Ctx, token: string): Promise<ShareRow> {
   if (!s || (s.blob_id && !s.blob_name)) throw notFound("share");
   // An upload link of a disabled owner takes nothing.
   if (s.mode === "upload" && s.owner_status !== "active") throw notFound("share");
+  if (s.storage_status !== "active") throw storageDisabled();
   if (s.expires_at && s.expires_at < now()) throw new ApiError(410, "share_expired", "this share has expired");
   if (s.mode === "download" && s.max_downloads != null && s.download_count >= s.max_downloads)
     throw new ApiError(410, "share_exhausted", "this share reached its download limit");
@@ -404,6 +407,7 @@ async function loadUpload(c: Ctx) {
   const blobId = c.req.param("blobId");
   const claims = await verifyJwt<JWTPayload & { typ?: string; sid?: string }>(c.env.APP_SECRET, c.req.header("x-upload-token"));
   if (!s || claims?.typ !== "upload" || claims.sid !== s.id || claims.sub !== blobId) throw notFound("upload");
+  if (s.storage_status !== "active") throw storageDisabled();
   const blob = await one<BlobRow>(c.env.DB, `${BLOB_SELECT} WHERE b.id = ? AND b.project_id = ? AND b.status = 'pending'`, blobId, s.project_id);
   if (!blob) throw notFound("upload");
   c.set("statsUser", s.owner_id);

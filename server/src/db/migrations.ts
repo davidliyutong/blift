@@ -261,6 +261,20 @@ CREATE INDEX dav_passwords_user ON dav_passwords(user_id);
 CREATE INDEX dav_passwords_hash ON dav_passwords(secret_hash);
 `,
   },
+  {
+    // Storage backend lifecycle: 'active', 'disabled' (its projects are temporarily unavailable)
+    // or 'deleting' (its projects are gone; GC removes them, then the row). keep_objects: while
+    // deleting, drop the rows without deleting the objects. scrub: JSON state of the last scrub
+    // (services/scrub.ts), which walks a backend's files in object_key order (blobs_storage_key).
+    name: "0009_storage_lifecycle",
+    sql: `
+ALTER TABLE storages ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE storages ADD COLUMN keep_objects INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE storages ADD COLUMN scrub TEXT;
+CREATE INDEX blobs_storage_key ON blobs(storage_id, object_key);
+CREATE INDEX projects_storage ON projects(storage_id, status);
+`,
+  },
 ];
 
 const split = (sql: string) =>

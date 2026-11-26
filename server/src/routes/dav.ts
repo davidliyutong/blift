@@ -19,10 +19,10 @@
 import { Hono } from "hono";
 import { all, now, one, stmt, type DB } from "../db";
 import type { AppEnv, Ctx, UserRow } from "../env";
-import { ApiError } from "../lib/errors";
+import { ApiError, storageDisabled } from "../lib/errors";
 import { newId } from "../lib/ids";
 import { davCredential, type DavPassword } from "../services/dav";
-import { davHref, deleteBlobs, listBlobs, PROJECT_SELECT, type BlobRow, type ProjectRow } from "../services/projects";
+import { davHref, deleteBlobs, listBlobs, LIVE_PROJECT, PROJECT_SELECT, type BlobRow, type ProjectRow } from "../services/projects";
 import { getSettings } from "../services/settings";
 import { addStats } from "../services/stats";
 import { objectKey, storageFor } from "../services/storage";
@@ -67,7 +67,7 @@ function segments(pathname: string): string[] | null {
 function reachable(db: DB, at: Place, owner?: string) {
   return all<ProjectRow>(
     db,
-    `${PROJECT_SELECT} WHERE p.status = 'active' AND p.webdav_enabled = 1 AND (m.role IS NOT NULL OR ? = 'admin')
+    `${PROJECT_SELECT} WHERE ${LIVE_PROJECT} AND p.webdav_enabled = 1 AND (m.role IS NOT NULL OR ? = 'admin')
        AND (? IS NULL OR p.id = ?) AND (? IS NULL OR o.username = ? COLLATE NOCASE) ORDER BY o.username, p.name LIMIT 1000`,
     at.user.id,
     at.user.role,
@@ -82,6 +82,7 @@ async function inProject(db: DB, at: Place): Promise<InProject | null> {
   const [owner, name, ...path] = at.segs;
   const project = (await reachable(db, at, owner)).find((p) => p.name.toLowerCase() === name.toLowerCase());
   if (!project) return null;
+  if (project.storage_status === "disabled") throw storageDisabled();
   project.role ??= "owner"; // an admin who is not a member
   return { project, base: [project.owner_username ?? owner, project.name], path };
 }

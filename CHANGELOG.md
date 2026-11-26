@@ -6,6 +6,21 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Storage backend maintenance for admins. **Disable** a backend to make its projects temporarily
+  unavailable (they stay listed with `storage_status: "disabled"`; files, share links and WebDAV
+  answer the new `storage_disabled` error, shown by the web UI and the CLI). **Scrub** a backend
+  to check the bucket against the database by listing it (keys and sizes only), reporting missing
+  files and orphaned objects. **Delete** a backend that holds data together with all its
+  projects, deleting its objects or keeping the bucket as it is.
+
+### Changed
+
+- Moving a backend that holds files (endpoint, region, bucket, path style) now requires it to be
+  disabled first, and its prefix can no longer change; both answer `storage_in_use` (409).
+  Deleting a backend in use answers `storage_in_use` instead of `conflict`.
+
 ## [0.3.0] - 2026-11-14
 
 ### Added

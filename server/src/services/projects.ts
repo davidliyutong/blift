@@ -2,7 +2,7 @@ import { requireUser } from "../auth";
 import { all, chunks, now, one, placeholders, stmt, type DB, type Stmt } from "../db";
 import type { Ctx } from "../env";
 import { b64decode, b64encode } from "../lib/crypto";
-import { badRequest, forbidden, notFound } from "../lib/errors";
+import { badRequest, forbidden, notFound, storageDisabled } from "../lib/errors";
 import { likeArg, publicOrigin } from "../lib/http";
 import { userRef } from "./users";
 
@@ -25,17 +25,24 @@ export type ProjectRow = {
   owner_display_name: string | null;
   storage_name: string | null;
   storage_location: string | null;
+  storage_status: "active" | "disabled" | "deleting" | null;
   role: MemberRole;
 };
 
 /** SELECT list producing a ProjectRow; bind the caller's user id first. */
 export const PROJECT_SELECT = `
   SELECT p.*, m.role AS role, o.username AS owner_username, o.display_name AS owner_display_name,
-         st.name AS storage_name, st.location AS storage_location
+         st.name AS storage_name, st.location AS storage_location, st.status AS storage_status
   FROM projects p
   LEFT JOIN project_members m ON m.project_id = p.id AND m.user_id = ?
   LEFT JOIN users o ON o.id = p.owner_id
   LEFT JOIN storages st ON st.id = p.storage_id`;
+
+/**
+ * WHERE condition (on PROJECT_SELECT's aliases) for projects that exist for users: active, and
+ * not on a backend being deleted (GC flags those projects in batches; they are gone at once).
+ */
+export const LIVE_PROJECT = "p.status = 'active' AND COALESCE(st.status, 'active') != 'deleting'";
 
 /** Path of a WebDAV collection: /dav/<owner>/<project>/<directory>…/, each name percent-encoded. */
 export const davHref = (segs: string[], collection = true) =>
@@ -51,6 +58,7 @@ export function toProject(c: Ctx, p: ProjectRow) {
     storage_id: p.storage_id,
     storage_name: p.storage_name ?? "",
     storage_location: p.storage_location ?? "",
+    storage_status: p.storage_status === "disabled" ? "disabled" : "active",
     used_bytes: p.used_bytes,
     blob_count: p.blob_count,
     webdav_enabled: !!p.webdav_enabled,
@@ -64,14 +72,17 @@ export function toProject(c: Ctx, p: ProjectRow) {
  * Loads an active project the caller can access with at least `need`.
  * Admins implicitly act as owners of every project (moderation).
  * Non-members get 404 rather than 403 so project ids do not leak.
+ * A project on a disabled backend answers 503 storage_disabled, unless `disabled` allows it
+ * (reading the project itself and deleting it).
  */
-export async function loadProject(c: Ctx, id: string, need: MemberRole): Promise<ProjectRow> {
+export async function loadProject(c: Ctx, id: string, need: MemberRole, opts: { disabled?: boolean } = {}): Promise<ProjectRow> {
   const u = requireUser(c);
-  const p = await one<ProjectRow>(c.env.DB, `${PROJECT_SELECT} WHERE p.id = ? AND p.status = 'active'`, u.id, id);
+  const p = await one<ProjectRow>(c.env.DB, `${PROJECT_SELECT} WHERE p.id = ? AND ${LIVE_PROJECT}`, u.id, id);
   if (!p) throw notFound("project");
   if (!p.role && u.role === "admin") p.role = "owner";
   if (!p.role) throw notFound("project");
   if (RANK[p.role] < RANK[need]) throw forbidden(`requires ${need} role`);
+  if (p.storage_status === "disabled" && !opts.disabled) throw storageDisabled();
   return p;
 }
 

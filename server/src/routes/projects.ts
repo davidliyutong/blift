@@ -1,21 +1,38 @@
 import { Hono } from "hono";
 import { requireUser } from "../auth";
-import { all, now, one, run, stmt } from "../db";
+import { all, now, one, run, stmt, type DB, type Stmt } from "../db";
 import type { AppEnv } from "../env";
-import { badRequest, conflict, forbidden, notConfigured, notFound } from "../lib/errors";
+import { badRequest, conflict, forbidden, notConfigured, notFound, storageDisabled } from "../lib/errors";
 import { body, oneOf, projectName, str } from "../lib/http";
 import { newId } from "../lib/ids";
-import { deleteProjectStmts, loadProject, PROJECT_SELECT, toProject, type ProjectRow } from "../services/projects";
+import { deleteProjectStmts, LIVE_PROJECT, loadProject, PROJECT_SELECT, toProject, type ProjectRow } from "../services/projects";
 
 const r = new Hono<AppEnv>();
 
 const nameTaken = () => conflict("name_taken", "you already have a project with this name");
 
+/**
+ * Checks that `name` is free for the owner. A project of that name on a backend being deleted is
+ * gone for users but holds the name until GC deletes it; the returned statements delete it now.
+ */
+async function claimName(db: DB, ownerId: string, name: string): Promise<Stmt[]> {
+  const p = await one<{ id: string; owner_id: string; used_bytes: number; storage_status: string | null }>(
+    db,
+    `SELECT p.id, p.owner_id, p.used_bytes, st.status AS storage_status FROM projects p LEFT JOIN storages st ON st.id = p.storage_id
+     WHERE p.owner_id = ? AND p.name = ? COLLATE NOCASE AND p.status = 'active'`,
+    ownerId,
+    name,
+  );
+  if (!p) return [];
+  if (p.storage_status !== "deleting") throw nameTaken();
+  return deleteProjectStmts(db, p);
+}
+
 r.get("/", async (c) => {
   const u = requireUser(c);
   const rows = await all<ProjectRow>(
     c.env.DB,
-    `${PROJECT_SELECT} WHERE m.role IS NOT NULL AND p.status = 'active' ORDER BY p.updated_at DESC`,
+    `${PROJECT_SELECT} WHERE m.role IS NOT NULL AND ${LIVE_PROJECT} ORDER BY p.updated_at DESC`,
     u.id,
   );
   return c.json({ projects: rows.map((p) => toProject(c, p)) });
@@ -27,15 +44,19 @@ r.post("/", async (c) => {
   const name = projectName(b.name);
   const description = typeof b.description === "string" ? b.description.trim().slice(0, 1000) : "";
   const storage = b.storage_id
-    ? await one<{ id: string }>(c.env.DB, "SELECT id FROM storages WHERE id = ?", b.storage_id)
-    : await one<{ id: string }>(c.env.DB, "SELECT id FROM storages ORDER BY is_default DESC, created_at LIMIT 1");
+    ? await one<{ id: string; status: string }>(c.env.DB, "SELECT id, status FROM storages WHERE id = ? AND status != 'deleting'", b.storage_id)
+    : await one<{ id: string; status: string }>(
+        c.env.DB,
+        "SELECT id, status FROM storages WHERE status = 'active' ORDER BY is_default DESC, created_at LIMIT 1",
+      );
   if (!storage) throw b.storage_id ? notFound("storage") : notConfigured("no storage backend configured yet; ask an admin");
-  if (await one(c.env.DB, "SELECT 1 AS x FROM projects WHERE owner_id = ? AND name = ? COLLATE NOCASE AND status = 'active'", u.id, name))
-    throw nameTaken();
+  if (storage.status !== "active") throw storageDisabled();
+  const release = await claimName(c.env.DB, u.id, name);
 
   const id = newId();
   const t = now();
   await c.env.DB.batch([
+    ...release,
     stmt(
       c.env.DB,
       "INSERT INTO projects (id, name, description, owner_id, storage_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -49,36 +70,35 @@ r.post("/", async (c) => {
     ),
     stmt(c.env.DB, "INSERT INTO project_members (project_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)", id, u.id, t),
   ]);
-  return c.json(toProject(c, await loadProject(c, id, "viewer")), 201);
+  return c.json(toProject(c, await loadProject(c, id, "viewer", { disabled: true })), 201);
 });
 
-r.get("/:id", async (c) => c.json(toProject(c, await loadProject(c, c.req.param("id"), "viewer"))));
+r.get("/:id", async (c) => c.json(toProject(c, await loadProject(c, c.req.param("id"), "viewer", { disabled: true }))));
 
 r.patch("/:id", async (c) => {
   const p = await loadProject(c, c.req.param("id"), "owner");
   const b = await body(c);
   const name = b.name === undefined ? p.name : projectName(b.name);
   const description = typeof b.description === "string" ? b.description.trim().slice(0, 1000) : p.description;
-  if (
-    name.toLowerCase() !== p.name.toLowerCase() &&
-    (await one(c.env.DB, "SELECT 1 AS x FROM projects WHERE owner_id = ? AND name = ? COLLATE NOCASE AND status = 'active'", p.owner_id, name))
-  )
-    throw nameTaken();
+  const release = name.toLowerCase() !== p.name.toLowerCase() ? await claimName(c.env.DB, p.owner_id, name) : [];
   const webdav = b.webdav_enabled === undefined ? p.webdav_enabled : b.webdav_enabled === true;
-  await run(
-    c.env.DB,
-    "UPDATE projects SET name = ?, description = ?, webdav_enabled = ?, updated_at = ? WHERE id = ?",
-    name,
-    description,
-    webdav,
-    now(),
-    p.id,
-  );
+  await c.env.DB.batch([
+    ...release,
+    stmt(
+      c.env.DB,
+      "UPDATE projects SET name = ?, description = ?, webdav_enabled = ?, updated_at = ? WHERE id = ?",
+      name,
+      description,
+      webdav,
+      now(),
+      p.id,
+    ),
+  ]);
   return c.json(toProject(c, await loadProject(c, p.id, "viewer")));
 });
 
 r.delete("/:id", async (c) => {
-  const p = await loadProject(c, c.req.param("id"), "owner");
+  const p = await loadProject(c, c.req.param("id"), "owner", { disabled: true });
   await c.env.DB.batch(deleteProjectStmts(c.env.DB, p));
   return c.body(null, 204);
 });

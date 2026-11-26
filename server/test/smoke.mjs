@@ -812,4 +812,109 @@ assert.ok(users.users.every((u) => u.used_bytes === 0), "usage released after de
 assert.equal(users.total, 3);
 step(`admin stats (today: ${today.requests} requests, ${today.uploads} uploads, ${today.downloads} downloads)`);
 
+// ---------------------------------------------------------------------------
+// Storage backend lifecycle: disable, edit, scrub, delete with its projects.
+{
+  const { AwsClient } = await import("aws4fetch");
+  const raw = new AwsClient({ accessKeyId: storageCfg.access_key_id, secretAccessKey: storageCfg.secret_access_key, service: "s3", region: "us-east-1" });
+  const objUrl = (key) => `${storageCfg.endpoint.replace(/\/+$/, "")}/${storageCfg.bucket}/${key}`;
+
+  const st = await api("POST", "/api/admin/storages", { ...storageCfg, name: "third", prefix: "smoke3", location: "" }, { expect: 201 });
+  assert.deepEqual([st.status, st.scrub], ["active", null]);
+  const lc = await api("POST", "/api/projects", { name: "lifecycle", storage_id: st.id }, { expect: 201 });
+  assert.equal(lc.storage_status, "active");
+  await api("PATCH", `/api/projects/${lc.id}`, { webdav_enabled: true });
+  const fa = await upload(lc.id, "a.txt", Buffer.from("aaaa"));
+  const fb = await upload(lc.id, "b.txt", Buffer.from("bbbbbb"));
+  const lcShare = await api("POST", "/api/shares", { project_id: lc.id }, { expect: 201 });
+
+  // Scrub of a healthy backend.
+  let sc = (await api("POST", `/api/admin/storages/${st.id}/scrub`)).scrub;
+  assert.deepEqual([sc.status, sc.objects, sc.object_bytes, sc.files, sc.missing, sc.size_mismatch, sc.orphaned], ["done", 2, 10, 2, 0, 0, 0]);
+  // One object gone, one rewritten with another size, one extra object nobody refers to.
+  const fc = await upload(lc.id, "c.txt", Buffer.from("cc"));
+  assert.ok((await raw.fetch(objUrl(`smoke3/${lc.id}/${fa.id}`), { method: "DELETE" })).ok);
+  assert.ok((await raw.fetch(objUrl(`smoke3/${lc.id}/${fc.id}`), { method: "PUT", body: "longer than before" })).ok);
+  assert.ok((await raw.fetch(objUrl(`smoke3/${lc.id}/stray`), { method: "PUT", body: "xyz" })).ok);
+  sc = (await api("POST", `/api/admin/storages/${st.id}/scrub`)).scrub;
+  assert.deepEqual([sc.status, sc.objects, sc.files, sc.missing, sc.size_mismatch, sc.orphaned, sc.orphaned_bytes], ["done", 3, 3, 1, 1, 1, 3]);
+  assert.deepEqual(
+    sc.issues.map((i) => [i.kind, i.blob_id ?? i.key]).sort(),
+    [["missing", fa.id], ["orphaned", `smoke3/${lc.id}/stray`], ["size_mismatch", fc.id]],
+  );
+  assert.deepEqual(sc.issues.find((i) => i.kind === "size_mismatch").object_size, 18);
+  assert.equal((await api("DELETE", `/api/admin/storages/${st.id}/scrub`)).scrub.status, "done", "cancel leaves a finished scrub alone");
+  assert.equal(sc.cursor, undefined);
+  step("scrub: lists objects, finds missing and orphaned ones");
+
+  // Edit: credentials and labels freely; moving needs a disabled backend; the prefix is fixed.
+  await api("PATCH", `/api/admin/storages/${st.id}`, { location: "Lab", secret_access_key: storageCfg.secret_access_key });
+  assert.equal(await errCode(api("PATCH", `/api/admin/storages/${st.id}`, { bucket: "elsewhere" }, { expect: 409 })), "storage_in_use");
+  assert.equal(await errCode(api("PATCH", `/api/admin/storages/${st.id}`, { prefix: "moved" }, { expect: 409 })), "storage_in_use");
+
+  // Disable: the project stays listed, its content, share link and new projects are refused.
+  const dis = await api("PATCH", `/api/admin/storages/${st.id}`, { status: "disabled" });
+  assert.equal(dis.status, "disabled");
+  assert.equal((await api("GET", "/api/projects")).projects.find((p) => p.id === lc.id).storage_status, "disabled");
+  assert.equal((await api("GET", `/api/projects/${lc.id}`)).storage_status, "disabled");
+  assert.equal(await errCode(api("GET", `/api/projects/${lc.id}/blobs`, undefined, { expect: 503 })), "storage_disabled");
+  assert.equal(await errCode(api("GET", `/api/blobs/${fb.id}/download`, undefined, { expect: 503 })), "storage_disabled");
+  assert.equal(await errCode(api("GET", `/api/public/shares/${lcShare.token}`, undefined, { auth: null, expect: 503 })), "storage_disabled");
+  assert.equal(await errCode(api("POST", "/api/projects", { name: "nope", storage_id: st.id }, { expect: 503 })), "storage_disabled");
+  assert.equal((await dav("PROPFIND", `/admin/lifecycle/`, { headers: { depth: "1" } })).status, 503);
+  assert.ok(!(await api("GET", "/api/storages")).storages.some((s) => s.id === st.id));
+  // Moving while disabled is allowed (same place here) and clears the last scrub; scrubs still run.
+  const movedSt = await api("PATCH", `/api/admin/storages/${st.id}`, { endpoint: `${storageCfg.endpoint.replace(/\/+$/, "")}/` , region: "us-west-1" });
+  assert.deepEqual([movedSt.region, movedSt.scrub], ["us-west-1", null]);
+  await api("PATCH", `/api/admin/storages/${st.id}`, { region: "us-east-1" });
+  assert.equal((await api("POST", `/api/admin/storages/${st.id}/scrub`)).scrub.status, "done");
+  await api("PATCH", `/api/admin/storages/${st.id}`, { status: "active" });
+  assert.equal((await api("GET", `/api/projects/${lc.id}/blobs`)).blobs.length, 3);
+  assert.equal((await dav("PROPFIND", `/admin/lifecycle/`, { headers: { depth: "1" } })).status, 207);
+  step("disable: projects stay listed as disabled, content and links answer storage_disabled; edits while disabled");
+
+  // Delete: refused while in use, then with its projects; GC removes the files, objects and row.
+  assert.equal(await errCode(api("DELETE", `/api/admin/storages/${st.id}`, undefined, { expect: 409 })), "storage_in_use");
+  const del = await api("DELETE", `/api/admin/storages/${st.id}?projects=delete`, undefined, { expect: 202 });
+  assert.deepEqual([del.status, del.objects, del.project_count, del.used_bytes, del.in_use], ["deleting", "delete", 0, 0, true]);
+  assert.equal((await dav("PROPFIND", `/admin/lifecycle/`, { headers: { depth: "1" } })).status, 404);
+  assert.ok(!(await api("GET", "/api/projects")).projects.some((p) => p.id === lc.id));
+  assert.equal(await errCode(api("GET", `/api/projects/${lc.id}`, undefined, { expect: 404 })), "not_found");
+  assert.equal(await errCode(api("GET", `/api/public/shares/${lcShare.token}`, undefined, { auth: null, expect: 404 })), "not_found");
+  assert.equal(await errCode(api("PATCH", `/api/admin/storages/${st.id}`, { status: "active" }, { expect: 409 })), "conflict");
+  // Its projects' names are free at once, even before GC deletes them.
+  const again = await api("POST", "/api/projects", { name: "lifecycle" }, { expect: 201 });
+  await api("DELETE", `/api/projects/${again.id}`, undefined, { expect: 204 });
+  for (let i = 0; i < 5 && (await api("GET", "/api/admin/storages")).storages.some((s) => s.id === st.id); i++)
+    await api("POST", "/api/admin/gc", {});
+  assert.ok(!(await api("GET", "/api/admin/storages")).storages.some((s) => s.id === st.id), "storage row purged by GC");
+  assert.equal((await raw.fetch(objUrl(`smoke3/${lc.id}/${fb.id}`), { method: "HEAD" })).status, 404, "objects deleted");
+  await raw.fetch(objUrl(`smoke3/${lc.id}/stray`), { method: "DELETE" });
+  assert.equal((await raw.fetch(objUrl(`smoke3/${lc.id}/${fc.id}`), { method: "HEAD" })).status, 404);
+  assert.ok((await api("GET", "/api/admin/users")).users.every((u) => u.used_bytes === 0), "usage released");
+
+  // objects=keep: rows go, the bucket is left alone.
+  const st4 = await api("POST", "/api/admin/storages", { ...storageCfg, name: "fourth", prefix: "smoke4", location: "" }, { expect: 201 });
+  const kp = await api("POST", "/api/projects", { name: "kept", storage_id: st4.id }, { expect: 201 });
+  const fk = await upload(kp.id, "k.txt", Buffer.from("keep"));
+  await api("PATCH", `/api/admin/storages/${st4.id}`, { status: "disabled" });
+  // Its owner deleted the project, GC cannot reach the (disabled) backend: no projects, still in use.
+  await api("DELETE", `/api/projects/${kp.id}`, undefined, { expect: 204 });
+  await api("POST", "/api/admin/gc", {});
+  const left = (await api("GET", "/api/admin/storages")).storages.find((s) => s.id === st4.id);
+  assert.deepEqual([left.project_count, left.in_use], [0, true]);
+  assert.equal(await errCode(api("DELETE", `/api/admin/storages/${st4.id}`, undefined, { expect: 409 })), "storage_in_use");
+  assert.equal((await api("DELETE", `/api/admin/storages/${st4.id}?projects=delete&objects=keep`, undefined, { expect: 202 })).objects, "keep");
+  for (let i = 0; i < 5 && (await api("GET", "/api/admin/storages")).storages.some((s) => s.id === st4.id); i++)
+    await api("POST", "/api/admin/gc", {});
+  assert.ok(!(await api("GET", "/api/admin/storages")).storages.some((s) => s.id === st4.id));
+  assert.equal((await raw.fetch(objUrl(`smoke4/${kp.id}/${fk.id}`), { method: "HEAD" })).status, 200, "object kept");
+  await raw.fetch(objUrl(`smoke4/${kp.id}/${fk.id}`), { method: "DELETE" });
+  // An unused backend goes at once.
+  const st5 = await api("POST", "/api/admin/storages", { ...storageCfg, name: "fifth", prefix: "smoke5", location: "" }, { expect: 201 });
+  assert.equal(st5.in_use, false);
+  await api("DELETE", `/api/admin/storages/${st5.id}`, undefined, { expect: 204 });
+  step("delete: refused in use; with projects=delete (objects deleted or kept, names freed at once), purged by GC; unused at once");
+}
+
 console.log("\nall smoke checks passed");

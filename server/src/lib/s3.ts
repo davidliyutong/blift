@@ -21,14 +21,22 @@ export type Part = { part_number: number; etag: string };
 const xmlEscape = (s: string) =>
   s.replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[c]!);
 const xmlUnescape = (s: string) =>
-  s.replace(/&(lt|gt|amp|apos|quot|#34|#39);/g, (_, e) =>
-    ({ lt: "<", gt: ">", amp: "&", apos: "'", quot: '"', "#34": '"', "#39": "'" })[e as string]!,
+  s.replace(/&(lt|gt|amp|apos|quot|#x[0-9a-fA-F]+|#\d+);/g, (_, e: string) =>
+    e[0] === "#"
+      ? String.fromCodePoint(e[1] === "x" ? parseInt(e.slice(2), 16) : Number(e.slice(1)))
+      : ({ lt: "<", gt: ">", amp: "&", apos: "'", quot: '"' } as Record<string, string>)[e],
   );
 const xmlValue = (xml: string, tag: string) => {
   const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
   return m ? xmlUnescape(m[1]) : null;
 };
 const xmlBlocks = (xml: string, tag: string) => xml.match(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g")) ?? [];
+
+// ListObjectsV2, compiled once (a page has up to 1000 <Contents>).
+const CONTENTS = /<Contents>([\s\S]*?)<\/Contents>/g;
+const KEY = /<Key>([^<]*)<\/Key>/;
+const SIZE = /<Size>(\d+)<\/Size>/;
+const TRUNCATED = /<IsTruncated>true<\/IsTruncated>/;
 
 const md5b64 = (body: string) => createHash("md5").update(body).digest("base64");
 
@@ -163,6 +171,23 @@ export class S3 {
     const res = await this.send("PUT", to, { headers: { "x-amz-copy-source": source } });
     const text = await res.text();
     if (text.includes("<Error>")) throw storageError(xmlValue(text, "Code") ?? "", xmlValue(text, "Message") ?? "");
+  }
+
+  /**
+   * One page of ListObjectsV2 (≤ 1000 keys, in UTF-8 byte order) under `prefix`, after
+   * `startAfter`. Only keys and sizes are parsed: scrubs read a lot of these.
+   */
+  async list(prefix: string, startAfter: string, maxKeys = 1000): Promise<{ objects: { key: string; size: number }[]; truncated: boolean }> {
+    const query: Record<string, string> = { "list-type": "2", "max-keys": String(maxKeys), prefix };
+    if (startAfter) query["start-after"] = startAfter;
+    const xml = await (await this.send("GET", "", { query })).text();
+    const objects: { key: string; size: number }[] = [];
+    for (const m of xml.matchAll(CONTENTS)) {
+      const key = KEY.exec(m[1]);
+      const size = SIZE.exec(m[1]);
+      if (key) objects.push({ key: xmlUnescape(key[1]), size: size ? Number(size[1]) : 0 });
+    }
+    return { objects, truncated: TRUNCATED.test(xml) };
   }
 
   async put(key: string, body: string): Promise<void> {

@@ -62,7 +62,7 @@ r.get("/storages", async (c) => {
   requireUser(c);
   const storages = await all<{ id: string; name: string; provider: string; location: string; is_default: number }>(
     c.env.DB,
-    "SELECT id, name, provider, location, is_default FROM storages ORDER BY is_default DESC, created_at",
+    "SELECT id, name, provider, location, is_default FROM storages WHERE status = 'active' ORDER BY is_default DESC, created_at",
   );
   return c.json({ storages: storages.map((s) => ({ ...s, is_default: !!s.is_default })) });
 });

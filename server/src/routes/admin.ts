@@ -3,16 +3,17 @@ import { requireAdmin } from "../auth";
 import { all, now, one, run, stmt } from "../db";
 import type { AppEnv, Ctx, UserRow } from "../env";
 import { decrypt, encrypt } from "../lib/crypto";
-import { badRequest, conflict, notFound } from "../lib/errors";
+import { badRequest, conflict, notFound, storageInUse as inUseError } from "../lib/errors";
 import { body, int, likeArg, oneOf, optStr, publicOrigin, str } from "../lib/http";
 import { newId, randomString } from "../lib/ids";
 import { discover } from "../lib/oidc";
 import { S3 } from "../lib/s3";
 import { runGc } from "../services/gc";
-import { deleteProjectStmts, PROJECT_SELECT, toProject, type ProjectRow } from "../services/projects";
+import { deleteProjectStmts, LIVE_PROJECT, PROJECT_SELECT, toProject, type ProjectRow } from "../services/projects";
+import { cancelScrub, scrubStep, startScrub, toScrub } from "../services/scrub";
 import { getSettings, putSetting, type Settings } from "../services/settings";
 import { day } from "../services/stats";
-import { storageFor, type StorageRow } from "../services/storage";
+import { releaseStorageProjects, storageFor, storageInUse, type StorageRow } from "../services/storage";
 import { effectiveQuota, toUser } from "../services/users";
 import { redirectUri } from "./oidc";
 
@@ -35,9 +36,9 @@ r.get("/stats", async (c) => {
       db,
       `SELECT
          (SELECT COUNT(*) FROM users) AS users,
-         (SELECT COUNT(*) FROM projects WHERE status = 'active') AS projects,
-         (SELECT COALESCE(SUM(blob_count), 0) FROM projects WHERE status = 'active') AS blobs,
-         (SELECT COALESCE(SUM(used_bytes), 0) FROM projects WHERE status = 'active') AS used_bytes,
+         (SELECT COUNT(*) FROM projects WHERE status = 'active' AND storage_id NOT IN (SELECT id FROM storages WHERE status = 'deleting')) AS projects,
+         (SELECT COALESCE(SUM(blob_count), 0) FROM projects WHERE status = 'active' AND storage_id NOT IN (SELECT id FROM storages WHERE status = 'deleting')) AS blobs,
+         (SELECT COALESCE(SUM(used_bytes), 0) FROM projects WHERE status = 'active' AND storage_id NOT IN (SELECT id FROM storages WHERE status = 'deleting')) AS used_bytes,
          (SELECT COUNT(*) FROM shares) AS shares,
          (SELECT COUNT(*) FROM storages) AS storages`,
     ),
@@ -52,7 +53,7 @@ r.get("/stats", async (c) => {
     all<{ id: string; name: string; used_bytes: number; blob_count: number }>(
       db,
       `SELECT st.id, st.name, COALESCE(SUM(p.used_bytes), 0) AS used_bytes, COALESCE(SUM(p.blob_count), 0) AS blob_count
-       FROM storages st LEFT JOIN projects p ON p.storage_id = st.id AND p.status = 'active'
+       FROM storages st LEFT JOIN projects p ON p.storage_id = st.id AND p.status = 'active' AND st.status != 'deleting'
        GROUP BY st.id ORDER BY st.created_at`,
     ),
     all<{ id: string; username: string | null; display_name: string | null; requests: number; upload_bytes: number; download_bytes: number }>(
@@ -100,7 +101,7 @@ const toAdminUser = (u: AdminUserRow, s: Settings) => ({
 });
 
 const ADMIN_USER_SELECT = `
-  SELECT u.*, (SELECT COUNT(*) FROM projects p WHERE p.owner_id = u.id AND p.status = 'active') AS project_count
+  SELECT u.*, (SELECT COUNT(*) FROM projects p WHERE p.owner_id = u.id AND p.status = 'active' AND p.storage_id NOT IN (SELECT id FROM storages WHERE status = 'deleting')) AS project_count
   FROM users u`;
 
 async function otherActiveAdmins(c: Ctx, id: string) {
@@ -174,12 +175,12 @@ r.get("/projects", async (c) => {
   const q = (c.req.query("q") ?? "").trim();
   const limit = int(c.req.query("limit") ?? 50, "limit", 1, 500);
   const offset = int(c.req.query("offset") ?? 0, "offset", 0, 1e9);
-  const where = `p.status = 'active'${q ? " AND (p.name LIKE ? ESCAPE '\\' OR o.username LIKE ? ESCAPE '\\')" : ""}`;
+  const where = `${LIVE_PROJECT}${q ? " AND (p.name LIKE ? ESCAPE '\\' OR o.username LIKE ? ESCAPE '\\')" : ""}`;
   const args = q ? [likeArg(q), likeArg(q)] : [];
   const uid = c.get("user")!.id;
   const [rows, total] = await Promise.all([
     all<ProjectRow>(c.env.DB, `${PROJECT_SELECT} WHERE ${where} ORDER BY p.used_bytes DESC LIMIT ? OFFSET ?`, uid, ...args, limit, offset),
-    one<{ n: number }>(c.env.DB, `SELECT COUNT(*) AS n FROM projects p LEFT JOIN users o ON o.id = p.owner_id WHERE ${where}`, ...args),
+    one<{ n: number }>(c.env.DB, `SELECT COUNT(*) AS n FROM projects p LEFT JOIN users o ON o.id = p.owner_id LEFT JOIN storages st ON st.id = p.storage_id WHERE ${where}`, ...args),
   ]);
   return c.json({ projects: rows.map((p) => toProject(c, { ...p, role: p.role ?? "owner" })), total: total?.n ?? 0 });
 });
@@ -188,7 +189,9 @@ r.get("/projects", async (c) => {
 
 const PROVIDERS = ["s3", "r2", "b2", "rustfs", "minio", "other"] as const;
 
-const toAdminStorage = (s: StorageRow & { project_count: number; used_bytes: number }) => ({
+type AdminStorageRow = StorageRow & { project_count: number; used_bytes: number; in_use: number };
+
+const toAdminStorage = (s: AdminStorageRow) => ({
   id: s.id,
   name: s.name,
   provider: s.provider,
@@ -203,15 +206,25 @@ const toAdminStorage = (s: StorageRow & { project_count: number; used_bytes: num
   created_at: s.created_at,
   project_count: s.project_count,
   used_bytes: s.used_bytes,
+  in_use: !!s.in_use,
+  status: s.status,
+  objects: s.keep_objects ? "keep" : "delete",
+  scrub: toScrub(s.scrub),
 });
 
+// project_count / used_bytes: active projects (none for a deleting backend, whose projects are gone
+// for users even before GC flags them). in_use: anything at all refers to it (see storageInUse).
 const STORAGE_SELECT = `
   SELECT st.*,
-    (SELECT COUNT(*) FROM projects p WHERE p.storage_id = st.id AND p.status = 'active') AS project_count,
-    (SELECT COALESCE(SUM(used_bytes), 0) FROM projects p WHERE p.storage_id = st.id AND p.status = 'active') AS used_bytes
+    (SELECT COUNT(*) FROM projects p WHERE p.storage_id = st.id AND p.status = 'active' AND st.status != 'deleting') AS project_count,
+    (SELECT COALESCE(SUM(used_bytes), 0) FROM projects p WHERE p.storage_id = st.id AND p.status = 'active' AND st.status != 'deleting') AS used_bytes,
+    (EXISTS (SELECT 1 FROM projects p WHERE p.storage_id = st.id) OR EXISTS (SELECT 1 FROM blobs b WHERE b.storage_id = st.id)) AS in_use
   FROM storages st`;
 
-type StorageInput = Omit<StorageRow, "id" | "created_at" | "updated_at" | "path_style" | "is_default"> & {
+type StorageInput = Pick<
+  StorageRow,
+  "name" | "provider" | "endpoint" | "region" | "bucket" | "access_key_id" | "secret_access_key" | "prefix" | "location"
+> & {
   path_style: boolean;
   is_default: boolean;
 };
@@ -243,11 +256,11 @@ function storageInput(b: Record<string, unknown>, base?: StorageRow): StorageInp
 }
 
 r.get("/storages", async (c) => {
-  const rows = await all<StorageRow & { project_count: number; used_bytes: number }>(c.env.DB, `${STORAGE_SELECT} ORDER BY st.created_at`);
+  const rows = await all<AdminStorageRow>(c.env.DB, `${STORAGE_SELECT} ORDER BY st.created_at`);
   return c.json({ storages: rows.map(toAdminStorage) });
 });
 
-async function saveStorage(c: Ctx, id: string, s: StorageInput, secretEnc: string, isNew: boolean) {
+async function saveStorage(c: Ctx, id: string, s: StorageInput, secretEnc: string, isNew: boolean, extra = { status: "active", clearScrub: false }) {
   const db = c.env.DB;
   const t = now();
   const first = isNew && !(await one(db, "SELECT 1 AS x FROM storages LIMIT 1"));
@@ -264,12 +277,14 @@ async function saveStorage(c: Ctx, id: string, s: StorageInput, secretEnc: strin
       : stmt(
           db,
           `UPDATE storages SET name = ?, provider = ?, endpoint = ?, region = ?, bucket = ?, access_key_id = ?, secret_access_key = ?,
-             path_style = ?, prefix = ?, location = ?, is_default = ?, updated_at = ? WHERE id = ?`,
-          s.name, s.provider, s.endpoint, s.region, s.bucket, s.access_key_id, secretEnc, s.path_style, s.prefix, s.location, isDefault, t, id,
+             path_style = ?, prefix = ?, location = ?, is_default = ?, status = ?, scrub = CASE WHEN ? THEN NULL ELSE scrub END,
+             updated_at = ? WHERE id = ?`,
+          s.name, s.provider, s.endpoint, s.region, s.bucket, s.access_key_id, secretEnc, s.path_style, s.prefix, s.location, isDefault,
+          extra.status, extra.clearScrub, t, id,
         ),
   );
   await db.batch(stmts);
-  const row = await one<StorageRow & { project_count: number; used_bytes: number }>(db, `${STORAGE_SELECT} WHERE st.id = ?`, id);
+  const row = await one<AdminStorageRow>(db, `${STORAGE_SELECT} WHERE st.id = ?`, id);
   return toAdminStorage(row!);
 }
 
@@ -279,23 +294,76 @@ r.post("/storages", async (c) => {
   return c.json(await saveStorage(c, newId(), s, await encrypt(c.env.APP_SECRET, s.secret_access_key), true), 201);
 });
 
+const loadStorage = async (c: Ctx, id: string) => {
+  const row = await one<StorageRow>(c.env.DB, "SELECT * FROM storages WHERE id = ?", id);
+  if (!row) throw notFound("storage");
+  return row;
+};
+const notDeleting = (st: StorageRow) => {
+  if (st.status === "deleting") throw conflict("conflict", "this storage backend is being deleted");
+};
+const adminStorage = async (c: Ctx, id: string) =>
+  toAdminStorage((await one<AdminStorageRow>(c.env.DB, `${STORAGE_SELECT} WHERE st.id = ?`, id))!);
+
+// Credentials, name, location and the default flag change freely. A backend that holds data can
+// only move (endpoint, region, bucket, addressing) while disabled, and never change its prefix:
+// every object key stored in blobs includes it. See "Storage backends" in docs/API.md.
 r.patch("/storages/:id", async (c) => {
-  const base = await one<StorageRow>(c.env.DB, "SELECT * FROM storages WHERE id = ?", c.req.param("id"));
-  if (!base) throw notFound("storage");
-  const s = storageInput(await body(c), base);
+  const base = await loadStorage(c, c.req.param("id"));
+  notDeleting(base);
+  const b = await body(c);
+  const s = storageInput(b, base);
+  const status = b.status === undefined ? base.status : oneOf(b.status, "status", ["active", "disabled"] as const);
+  const moved = s.endpoint !== base.endpoint || s.region !== base.region || s.bucket !== base.bucket || s.path_style !== !!base.path_style;
+  const prefixChanged = s.prefix !== base.prefix;
+  if ((moved || prefixChanged) && (await storageInUse(c.env.DB, base.id))) {
+    if (prefixChanged) throw inUseError("the prefix of a backend that holds files cannot change: every object key includes it");
+    if (base.status !== "disabled" && status !== "disabled")
+      throw inUseError("disable the backend before moving it (endpoint, region, bucket or path style)");
+  }
   const secret = s.secret_access_key ? await encrypt(c.env.APP_SECRET, s.secret_access_key) : base.secret_access_key;
-  return c.json(await saveStorage(c, base.id, s, secret, false));
+  return c.json(await saveStorage(c, base.id, s, secret, false, { status, clearScrub: moved }));
 });
 
+// Unused: removed at once. In use: with projects=delete the backend turns 'deleting', its
+// projects are gone at once (the first ones deleted here, the rest and their files by GC) and
+// GC removes the row once nothing refers to it.
 r.delete("/storages/:id", async (c) => {
-  const id = c.req.param("id");
-  if (
-    (await one(c.env.DB, "SELECT 1 AS x FROM projects WHERE storage_id = ? LIMIT 1", id)) ||
-    (await one(c.env.DB, "SELECT 1 AS x FROM blobs WHERE storage_id = ? LIMIT 1", id))
-  )
-    throw conflict("conflict", "storage is still used by projects or files pending deletion");
-  if (!(await run(c.env.DB, "DELETE FROM storages WHERE id = ?", id))) throw notFound("storage");
-  return c.body(null, 204);
+  const db = c.env.DB;
+  const st = await loadStorage(c, c.req.param("id"));
+  const objects = oneOf(c.req.query("objects") ?? "delete", "objects", ["delete", "keep"] as const);
+  if (!(await storageInUse(db, st.id))) {
+    await run(db, "DELETE FROM storages WHERE id = ?", st.id);
+    return c.body(null, 204);
+  }
+  if (st.status !== "deleting" && c.req.query("projects") !== "delete")
+    throw inUseError("the backend holds projects or files; pass projects=delete to delete them with it");
+  await cancelScrub(db, st.id); // GC does not scrub a deleting backend
+  await run(
+    db,
+    "UPDATE storages SET status = 'deleting', keep_objects = ?, is_default = 0, updated_at = ? WHERE id = ?",
+    objects === "keep",
+    now(),
+    st.id,
+  );
+  await releaseStorageProjects(db, st.id, 90);
+  return c.json(await adminStorage(c, st.id), 202);
+});
+
+// Scrub: the request does a few listing pages, GC the rest (services/scrub.ts).
+r.post("/storages/:id/scrub", async (c) => {
+  const st = await loadStorage(c, c.req.param("id"));
+  notDeleting(st);
+  await startScrub(c.env.DB, st.id);
+  const fresh = await loadStorage(c, st.id);
+  await scrubStep(c.env, fresh, 3);
+  return c.json(await adminStorage(c, st.id));
+});
+
+r.delete("/storages/:id/scrub", async (c) => {
+  const st = await loadStorage(c, c.req.param("id"));
+  await cancelScrub(c.env.DB, st.id);
+  return c.json(await adminStorage(c, st.id));
 });
 
 // Round-trip test: PUT, HEAD and DELETE a small object. Works with unsaved configs.
@@ -326,7 +394,7 @@ r.post("/storages/test", async (c) => {
 });
 
 r.post("/storages/:id/cors", async (c) => {
-  const { s3 } = await storageFor(c.env, c.req.param("id"));
+  const { s3 } = await storageFor(c.env, c.req.param("id"), { any: true });
   const b = await c.req.json().catch(() => ({}) as { origins?: unknown });
   const origins = Array.isArray(b.origins) && b.origins.length ? b.origins.map(String) : [publicOrigin(c)];
   try {
