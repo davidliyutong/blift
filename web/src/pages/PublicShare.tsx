@@ -4,6 +4,7 @@ import { Badge, Banner, Button, LinkButton, SensitiveInput } from "@cloudflare/k
 import {
   CaretRightIcon,
   ClockCountdownIcon,
+  CloudSlashIcon,
   DownloadSimpleIcon,
   FolderSimpleIcon,
   LinkBreakIcon,
@@ -84,6 +85,17 @@ export function PublicSharePage() {
   if (res.error || !res.data) {
     const code = res.error instanceof ApiError ? res.error.code : "";
     const gone = code === "share_expired" || code === "share_exhausted";
+    if (code === "storage_disabled") {
+      return (
+        <CenteredLayout footer={footer} title={t("pub.unavailable")}>
+          <Card className="flex flex-col items-center gap-3 text-center">
+            <CloudSlashIcon size={48} weight="duotone" className="text-kumo-subtle" />
+            <h1 className="m-0 text-xl font-semibold">{t("pub.unavailable")}</h1>
+            <p className="m-0 text-sm text-kumo-subtle">{t("pub.unavailableDesc")}</p>
+          </Card>
+        </CenteredLayout>
+      );
+    }
     return (
       <CenteredLayout footer={footer} title={t("pub.notFound")}>
         <Card className="flex flex-col items-center gap-3 text-center">

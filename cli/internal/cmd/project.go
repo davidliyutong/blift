@@ -46,7 +46,11 @@ func listProjects(ctx context.Context) error {
 	}
 	rows := make([][]string, 0, len(projects))
 	for _, p := range projects {
-		rows = append(rows, []string{p.Name, p.Owner.Username, p.Role,
+		name := p.Name
+		if p.StorageStatus == "disabled" {
+			name += " " + i18n.T("project.storage_disabled")
+		}
+		rows = append(rows, []string{name, p.Owner.Username, p.Role,
 			strconv.FormatInt(p.BlobCount, 10), ui.Size(p.UsedBytes), ui.Time(p.UpdatedAt), p.ID})
 	}
 	table([]string{"col.name", "col.owner", "col.role", "col.files", "col.size", "col.updated", "col.id"}, rows)
@@ -107,12 +111,16 @@ func projectInfoCmd() *cobra.Command {
 			if p.StorageLocation != "" {
 				storage += " · " + p.StorageLocation
 			}
+			storage = fmt.Sprintf("%s (%s)", storage, p.StorageID)
+			if p.StorageStatus == "disabled" {
+				storage += " " + i18n.T("project.storage_disabled")
+			}
 			kv("col.id", p.ID,
 				"col.name", p.Name,
 				"col.description", p.Description,
 				"col.owner", p.Owner.Username,
 				"col.role", p.Role,
-				"col.storage", fmt.Sprintf("%s (%s)", storage, p.StorageID),
+				"col.storage", storage,
 				"col.files", strconv.FormatInt(p.BlobCount, 10),
 				"col.size", ui.Size(p.UsedBytes),
 				"col.created", ui.Time(p.CreatedAt),

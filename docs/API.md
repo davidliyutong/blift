@@ -42,7 +42,9 @@ and the CLI (`cli/`). Change it together with the code.
 | `authorization_pending` | 400 | CLI login not approved yet (poll again) |
 | `access_denied` | 400 | CLI login denied |
 | `expired_token` | 400 | CLI login request expired |
+| `storage_in_use` | 409 | the storage backend holds data: delete it with its projects, or disable it before moving it (see "Storage backends") |
 | `not_configured` | 503 | storage / OIDC / bootstrap secret not configured |
+| `storage_disabled` | 503 | the project's storage backend is disabled by an admin; the project is temporarily unavailable |
 | `storage_error` | 502 | the S3 backend returned an error (`message` has details) |
 | `upstream_error` | 502 | GitHub Releases could not be reached (CLI download relay) |
 | `oidc_error` | 502 | OIDC provider error |
@@ -70,6 +72,7 @@ type Project = {
   role: "owner" | "editor" | "viewer";   // caller's role
   storage_id: string; storage_name: string;
   storage_location: string;              // the backend's location label ("" when not set)
+  storage_status: "active" | "disabled"; // "disabled": temporarily unavailable, see "Storage backends"
   used_bytes: number; blob_count: number;
   webdav_enabled: boolean;               // see "WebDAV"
   webdav_url: string;                    // <public origin>/dav/<owner>/<project>/
@@ -237,6 +240,7 @@ Web-side (authenticated):
 
 `location` is a free-text label set by the admin, such as `Singapore` or `US West` (`""` when not
 set), shown when users pick the backend of a new project (`storage_id` in `POST /api/projects`).
+Only enabled backends are listed; creating a project on a disabled one fails with `storage_disabled`.
 
 ## Projects
 
@@ -509,8 +513,10 @@ credentials get `401` with `WWW-Authenticate: Basic`; `OPTIONS` needs none.
 | GET | `/api/admin/projects?q=&limit=50&offset=0` | – | `{projects: (Project & {owner})[], total}` |
 | GET | `/api/admin/storages` | – | `{storages: AdminStorage[]}` |
 | POST | `/api/admin/storages` | storage config | `AdminStorage` |
-| PATCH | `/api/admin/storages/:id` | partial config (`secret_access_key` omitted = unchanged) | `AdminStorage` |
-| DELETE | `/api/admin/storages/:id` | – | 204 (409 `conflict` if projects use it) |
+| PATCH | `/api/admin/storages/:id` | partial config (`secret_access_key` omitted = unchanged), `status?: "active"\|"disabled"` | `AdminStorage` |
+| DELETE | `/api/admin/storages/:id?projects=delete&objects=delete\|keep` | – | 204 when unused; 202 `AdminStorage` (status `deleting`) with `projects=delete`; 409 `storage_in_use` otherwise |
+| POST | `/api/admin/storages/:id/scrub` | – | `AdminStorage` (starts or restarts a scrub) |
+| DELETE | `/api/admin/storages/:id/scrub` | – | `AdminStorage` (cancels a running scrub) |
 | POST | `/api/admin/storages/test` | storage config (+ `id` to reuse the saved secret) | `{ok, latency_ms, error?}` |
 | POST | `/api/admin/storages/:id/cors` | `{origins?: string[]}` | `{ok, error?}` (PutBucketCors) |
 | GET | `/api/admin/settings` | – | `Settings` |
@@ -525,9 +531,27 @@ type AdminUser = User & { status: "active" | "disabled"; quota_override: number 
 
 type AdminStorage = { id, name, provider: "s3"|"r2"|"b2"|"rustfs"|"minio"|"other",
   endpoint, region, bucket, access_key_id, path_style: boolean, prefix: string,
-  location: string, is_default: boolean, created_at, project_count: number, used_bytes: number };
+  location: string, is_default: boolean, created_at, project_count: number, used_bytes: number,
+  in_use: boolean, status: "active" | "disabled" | "deleting", objects: "delete" | "keep" /* while deleting */,
+  scrub: Scrub | null };
 // region: the S3 signing region ("auto" for R2, "us-east-1" for MinIO/RustFS…).
 // location: optional display label for users (≤ 64 chars, "" = none), e.g. "Singapore".
+// project_count / used_bytes: active projects (projects being deleted are not counted; 0 while
+// the backend is deleting). in_use: any project or file refers to it, in any state (including
+// ones waiting for GC): such a backend cannot move or change its prefix, and needs projects=delete.
+
+type Scrub = {
+  status: "running" | "done" | "canceled" | "failed";
+  started_at: number; finished_at: number | null; error: string | null;
+  objects: number; object_bytes: number;   // objects found under the backend's prefix
+  files: number;                           // active files checked
+  missing: number;                         // active files with no object
+  size_mismatch: number;                   // active files whose object has another size
+  orphaned: number; orphaned_bytes: number;// objects no file refers to (they only take space)
+  issues: { kind: "missing" | "size_mismatch" | "orphaned", key: string,
+            project_id?: string, blob_id?: string, size?: number, object_size?: number }[];
+                                           // the first 100 problems
+};
 
 type Settings = {
   site: { name: string; default_quota_bytes: number /* -1 unlimited */ };
@@ -551,3 +575,35 @@ type Stats = {
 Traffic counters: `requests` counts API requests; `upload_bytes` is counted when an upload
 completes; `download_bytes` when a download URL is issued (the blob size — data itself flows
 directly between the client and S3).
+
+### Storage backends
+
+A backend is `active`, `disabled` or `deleting`.
+
+- **Disable** (`PATCH {status: "disabled"}`, undone with `{status: "active"}`): its projects stay
+  listed with `storage_status: "disabled"`, and `GET` / `DELETE /api/projects/:id` still work; every
+  other request on them (files, uploads, the project's shares, members, settings), their share links
+  and their WebDAV paths answer 503 `storage_disabled`. `GET /api/shares` (without `project_id`)
+  still lists their shares and `DELETE /api/shares/:id` still deletes them. It is not offered for new projects, and GC does not
+  call it (deleted objects wait until it is enabled again). Use it for maintenance and migrations.
+- **Edit**: name, location, default flag and credentials (`access_key_id`, `secret_access_key`)
+  can change at any time. A backend that holds data (projects or files, including ones being
+  deleted) can only be moved (`endpoint`, `region`, `bucket`, `path_style`) while it is disabled,
+  and its `prefix` cannot change (every file's object key includes it); both are 409
+  `storage_in_use`. A migration is therefore: disable, copy the objects with their keys to the new
+  place, edit, scrub, enable. Moving a backend clears its last scrub.
+- **Scrub** checks that the backend holds what the database says, without reading file contents:
+  it lists the objects under the prefix (ListObjectsV2, 1000 keys per request) and compares keys
+  and sizes with the files' rows in key order. The request that starts it does the first few pages;
+  GC continues a bounded number of pages per run until it is done. Works while disabled; it only
+  reports (`AdminStorage.scrub`), it changes nothing. Uploads that are in progress are neither
+  missing nor orphaned, and files that became active after a page was listed are skipped. An
+  object GC deletes between the listing and the check can show up as orphaned; scrub again.
+- **Delete**: an unused backend is removed at once (204). One with data needs `projects=delete`:
+  the backend turns `deleting`, all its projects disappear at once (as if deleted by their owners:
+  the request deletes up to 90, GC the rest; their usage is released then, and their names are
+  free at once), and the row goes once nothing refers to it. A running scrub is canceled.
+  `objects=delete` (default) has GC delete the objects from the bucket; `objects=keep` drops the
+  rows without calling the backend, for one that is gone or whose bucket is kept. Repeating the
+  request on a `deleting` backend changes `objects`. A `deleting` backend cannot be edited or
+  scrubbed.

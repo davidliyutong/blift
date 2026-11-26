@@ -32,6 +32,7 @@ type Project struct {
 	StorageID       string  `json:"storage_id"`
 	StorageName     string  `json:"storage_name"`
 	StorageLocation string  `json:"storage_location"` // the backend's location label, "" when not set
+	StorageStatus   string  `json:"storage_status"`   // "active" | "disabled" (temporarily unavailable)
 	UsedBytes       int64   `json:"used_bytes"`
 	BlobCount       int64   `json:"blob_count"`
 	WebDAVEnabled   bool    `json:"webdav_enabled"`

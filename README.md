@@ -177,6 +177,18 @@ The S3 region is the signing region the provider expects. **Location** is separa
 a label such as "Singapore" or "US West" that users see next to the backend's name when they
 create a project.
 
+**Maintenance.** A backend's menu in **Administration → Storage backends** offers:
+
+- **Disable**: its projects stay listed but are marked as temporarily unavailable; their files,
+  share links and WebDAV paths answer "storage disabled" until it is enabled again.
+- **Edit**: credentials, name and location change at any time. A backend that holds files can only
+  be moved (endpoint, region, bucket, path style) while it is disabled, and keeps its prefix. To
+  migrate: disable, copy the objects with their keys (e.g. `rclone sync`), edit, scrub, enable.
+- **Scrub**: compares the bucket's listing with the database (keys and sizes, no file contents
+  are read) and reports missing files and orphaned objects. GC finishes large backends in steps.
+- **Delete**: an unused backend goes at once; one with data is deleted with all its projects,
+  either deleting its objects or leaving the bucket as it is.
+
 **Backblaze B2.** B2 keeps every version of a file, and an S3 delete without a version id only
 hides it. Set the bucket's lifecycle to **Keep only the last version of the file**, otherwise
 deleted files keep using (and billing) space. Use a private bucket without Object Lock and an

@@ -17,3 +17,6 @@ export const forbidden = (message = "permission denied") => new ApiError(403, "f
 export const notFound = (what = "resource") => new ApiError(404, "not_found", `${what} not found`);
 export const conflict = (code = "conflict", message?: string) => new ApiError(409, code, message);
 export const notConfigured = (message: string) => new ApiError(503, "not_configured", message);
+export const storageDisabled = () =>
+  new ApiError(503, "storage_disabled", "the storage backend of this project is disabled by an admin; try again later");
+export const storageInUse = (message: string) => new ApiError(409, "storage_in_use", message);

@@ -12,7 +12,8 @@ import type { Bindings } from "../env";
 import { pool } from "../lib/http";
 import { day } from "./stats";
 import { getSettings } from "./settings";
-import { storageFor } from "./storage";
+import { parseScrub, scrubStep } from "./scrub";
+import { releaseStorageProjects, storageFor, type StorageRow } from "./storage";
 import { drainDeletedDirs } from "./tree";
 
 /** Rows per write statement. */
@@ -42,6 +43,8 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
     projects_purged: 0,
     sessions_expired: 0,
     shares_expired: 0,
+    storages_purged: 0,
+    scrub_requests: 0,
     errors: 0,
     /** The row budget ran out: more work is waiting for the next run. */
     more: false,
@@ -80,6 +83,24 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
     t,
     t - s.gc.pending_upload_ttl_hours * 3_600_000,
   );
+
+  const storages = await all<Pick<StorageRow, "id" | "status" | "keep_objects" | "prefix" | "scrub">>(
+    db,
+    "SELECT id, status, keep_objects, prefix, scrub FROM storages ORDER BY created_at",
+  );
+
+  // 1b. Backends being deleted: delete their projects as their owners would, ≤ 90 at a time.
+  for (const st of storages.filter((x) => x.status === "deleting")) {
+    for (;;) {
+      if (rows <= 0) {
+        result.more = true;
+        break;
+      }
+      const n = await releaseStorageProjects(db, st.id, 90);
+      rows -= n * 2;
+      if (n < 90) break;
+    }
+  }
 
   // 2. Deleted projects (only flagged by the API): release their files, shares and members.
   let releaseLeft = share(0.4);
@@ -124,9 +145,20 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
 
   // 4. Remove objects of deleted blobs, then their rows; oldest first, one storage at a time
   //    (index blobs_gc). A storage that cannot be reached is skipped and costs nothing: its rows
-  //    wait without holding up the others.
-  for (const { id: storageId } of await all<{ id: string }>(db, "SELECT id FROM storages ORDER BY created_at")) {
-    if (budget <= 0 || rows <= 0) break;
+  //    wait without holding up the others. A disabled storage is not called at all; one being
+  //    deleted with keep_objects only loses its rows.
+  for (const { id: storageId, status, keep_objects } of storages) {
+    if (rows <= 0) break;
+    if (status === "disabled") continue;
+    if (status === "deleting" && keep_objects) {
+      await drain(
+        rows,
+        `DELETE FROM blobs WHERE id IN (SELECT id FROM blobs WHERE status = 'deleted' AND storage_id = ? LIMIT ${WRITE_BATCH})`,
+        storageId,
+      );
+      continue;
+    }
+    if (budget <= 0) continue;
     const want = Math.min(rows, 5000);
     const group = await all<{ id: string; object_key: string; upload_id: string | null }>(
       db,
@@ -138,7 +170,7 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
     if (group.length === want) result.more = true;
     let s3;
     try {
-      ({ s3 } = await storageFor(env, storageId));
+      ({ s3 } = await storageFor(env, storageId, { any: true }));
     } catch (e) {
       console.error(`gc: storage ${storageId}:`, e);
       result.errors++;
@@ -190,6 +222,33 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
        LIMIT ${WRITE_BATCH})`,
   );
 
+  // 5b. Deleted backends with nothing left.
+  for (const st of storages.filter((x) => x.status === "deleting")) {
+    result.storages_purged += await run(
+      db,
+      `DELETE FROM storages WHERE id = ? AND status = 'deleting'
+         AND NOT EXISTS (SELECT 1 FROM projects WHERE storage_id = ?)
+         AND NOT EXISTS (SELECT 1 FROM blobs WHERE storage_id = ?)`,
+      st.id,
+      st.id,
+      st.id,
+    );
+  }
+
+  // 5c. Running scrubs get what is left of the S3 budget, ≤ 10 listing pages per run. Read again:
+  //     a scrub may have been canceled or advanced while the steps above ran.
+  const scrubbing = await all<Pick<StorageRow, "id" | "prefix" | "scrub">>(
+    db,
+    "SELECT id, prefix, scrub FROM storages WHERE status != 'deleting' AND scrub IS NOT NULL ORDER BY created_at",
+  );
+  for (const st of scrubbing.filter((x) => parseScrub(x.scrub)?.status === "running")) {
+    const pages = Math.min(budget, 10);
+    if (pages <= 0) break;
+    const used = await scrubStep(env, st, pages);
+    budget -= used;
+    result.scrub_requests += used;
+  }
+
   // 6. Usage counters are maintained incrementally; recompute them to heal any drift.
   if (opts.reconcile) {
     await db.batch([
@@ -200,7 +259,8 @@ export async function runGc(env: Bindings, opts: GcOptions = {}) {
          WHERE status = 'active'`,
       ),
       db.prepare(
-        "UPDATE users SET used_bytes = (SELECT COALESCE(SUM(used_bytes), 0) FROM projects WHERE owner_id = users.id AND status = 'active')",
+        `UPDATE users SET used_bytes = (SELECT COALESCE(SUM(used_bytes), 0) FROM projects WHERE owner_id = users.id AND status = 'active'
+           AND storage_id NOT IN (SELECT id FROM storages WHERE status = 'deleting'))`,
       ),
     ]);
     result.reconciled = true;
