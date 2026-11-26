@@ -6,6 +6,8 @@ export const toast = {
   success: (title: string, description?: string) => toastManager.add({ title, description, variant: "success" }),
   error: (title: string, description?: string) =>
     toastManager.add({ title, description, variant: "error", timeout: 8000 }),
+  warning: (title: string, description?: string) =>
+    toastManager.add({ title, description, variant: "warning", timeout: 8000 }),
   info: (title: string, description?: string) => toastManager.add({ title, description, variant: "info" }),
 };
 

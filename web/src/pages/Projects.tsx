@@ -111,6 +111,9 @@ export function ProjectsPage() {
                       >
                         <FolderSimpleIcon size={18} className="shrink-0 text-kumo-subtle" weight="duotone" />
                         {p.name}
+                        {p.storage_status === "disabled" && (
+                          <Badge variant="orange">{t("project.storageDisabled")}</Badge>
+                        )}
                       </Link>
                       {p.description && (
                         <div className="mt-0.5 max-w-md truncate pl-7 text-xs text-kumo-subtle">{p.description}</div>

@@ -16,6 +16,8 @@ export function SettingsTab({ project, onUpdated }: { project: Project; onUpdate
   const navigate = useNavigate();
   const isOwner = project.role === "owner";
   const canDelete = isOwner || user?.role === "admin";
+  // While the storage backend is disabled only deleting the project works.
+  const locked = project.storage_status === "disabled";
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description);
   const [saving, setSaving] = useState(false);
@@ -55,15 +57,17 @@ export function SettingsTab({ project, onUpdated }: { project: Project; onUpdate
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 variant={valid ? "default" : "error"}
+                disabled={locked}
               />
               <Input
                 label={t("common.description")}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
+                disabled={locked}
                 required={false}
               />
               <div>
-                <Button type="submit" variant="primary" loading={saving} disabled={!dirty || !valid}>
+                <Button type="submit" variant="primary" loading={saving} disabled={locked || !dirty || !valid}>
                   {t("common.save")}
                 </Button>
               </div>
@@ -91,6 +95,7 @@ export function SettingsTab({ project, onUpdated }: { project: Project; onUpdate
             <Switch
               label={t("webdav.enable")}
               checked={project.webdav_enabled}
+              disabled={locked}
               onCheckedChange={async (on) => {
                 try {
                   await api.projects.update(project.id, { webdav_enabled: on });

@@ -20,6 +20,7 @@ import type {
   ShareUploadInit,
   Stats,
   StorageInput,
+  StorageObjectsMode,
   StorageSummary,
   UploadInit,
   User,
@@ -216,7 +217,13 @@ export const api = {
     createStorage: (body: StorageInput) => http.post<AdminStorage>("/api/admin/storages", body),
     updateStorage: (id: string, body: Partial<StorageInput>) =>
       http.patch<AdminStorage>(`/api/admin/storages/${enc(id)}`, body),
-    deleteStorage: (id: string) => http.del(`/api/admin/storages/${enc(id)}`),
+    /** 204 (undefined) when unused; with `projects` 202 and the backend, now `deleting`. */
+    deleteStorage: (id: string, opts?: { projects?: boolean; objects?: StorageObjectsMode }) =>
+      http.del<AdminStorage | undefined>(
+        `/api/admin/storages/${enc(id)}${qs({ projects: opts?.projects ? "delete" : undefined, objects: opts?.objects })}`,
+      ),
+    startScrub: (id: string) => http.post<AdminStorage>(`/api/admin/storages/${enc(id)}/scrub`),
+    cancelScrub: (id: string) => http.del<AdminStorage>(`/api/admin/storages/${enc(id)}/scrub`),
     testStorage: (body: Partial<StorageInput>) =>
       http.post<{ ok: boolean; latency_ms: number; error?: string }>("/api/admin/storages/test", body),
     applyCors: (id: string, origins?: string[]) =>

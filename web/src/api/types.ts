@@ -46,6 +46,8 @@ export interface Project {
   storage_name: string;
   /** The backend's location label; "" when not set. */
   storage_location: string;
+  /** "disabled": the backend is disabled by an admin and the project is temporarily unavailable. */
+  storage_status: "active" | "disabled";
   used_bytes: number;
   blob_count: number;
   /** WebDAV clients can reach the project at `webdav_url` (with a WebDAV password). */
@@ -281,8 +283,51 @@ export interface AdminStorage {
   location: string;
   is_default: boolean;
   created_at: number;
+  /** Active projects (projects being deleted are not counted). */
   project_count: number;
   used_bytes: number;
+  /** True while any project or file row (in any state, including ones waiting for GC) refers to the backend. */
+  in_use: boolean;
+  status: StorageStatus;
+  /** What GC does with the objects while the backend is `deleting`. */
+  objects: StorageObjectsMode;
+  scrub: Scrub | null;
+}
+
+export type StorageStatus = "active" | "disabled" | "deleting";
+export type StorageObjectsMode = "delete" | "keep";
+
+export type ScrubIssueKind = "missing" | "size_mismatch" | "orphaned";
+
+export interface ScrubIssue {
+  kind: ScrubIssueKind;
+  key: string;
+  project_id?: string;
+  blob_id?: string;
+  size?: number;
+  object_size?: number;
+}
+
+/** Result of checking a backend's objects against the database (keys and sizes only). */
+export interface Scrub {
+  status: "running" | "done" | "canceled" | "failed";
+  started_at: number;
+  finished_at: number | null;
+  error: string | null;
+  /** Objects found under the backend's prefix. */
+  objects: number;
+  object_bytes: number;
+  /** Active files checked. */
+  files: number;
+  /** Active files with no object. */
+  missing: number;
+  /** Active files whose object has another size. */
+  size_mismatch: number;
+  /** Objects no file refers to. */
+  orphaned: number;
+  orphaned_bytes: number;
+  /** The first 100 problems. */
+  issues: ScrubIssue[];
 }
 
 export interface StorageInput {
@@ -298,6 +343,7 @@ export interface StorageInput {
   prefix: string;
   location: string;
   is_default: boolean;
+  status?: "active" | "disabled";
 }
 
 export interface Settings {
